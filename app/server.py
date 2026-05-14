@@ -86,9 +86,17 @@ def create_app() -> Flask:
             data = f.read()
             questions = parse_upload(f.filename or "", data)
         except ValueError as e:
+            # Expected: layout couldn't be recognised, structural issues, etc.
             return jsonify(error=str(e)), 400
-        except Exception as e:  # any other parsing failure
-            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+        except Exception as e:
+            # Unexpected: log the full traceback so we can debug from logs.
+            import traceback
+            tb = traceback.format_exc()
+            app.logger.error("upload parse failed:\n%s", tb)
+            return jsonify(
+                error=f"{type(e).__name__}: {e}",
+                detail="See server logs for the full traceback.",
+            ), 400
 
         any_katex = any(
             has_katex(q.question) or has_katex(q.explanation)
@@ -119,11 +127,17 @@ def create_app() -> Flask:
         shuffle_o = bool(body.get("shuffle_options", True))
         fmt = (body.get("format") or "csv").lower()
         persist = bool(body.get("persist", False))
+        math_in_docx = (body.get("math_in_docx") or "equation").lower()
+        math_in_data = (body.get("math_in_data") or "katex").lower()
 
         if not paper_id:
             return jsonify(error="paper_id is required"), 400
         if not (1 <= n_sets <= 20):
             return jsonify(error="n_sets must be between 1 and 20"), 400
+        if math_in_docx not in ("equation", "text", "unicode"):
+            return jsonify(error=f"bad math_in_docx: {math_in_docx!r}"), 400
+        if math_in_data not in ("katex", "unicode"):
+            return jsonify(error=f"bad math_in_data: {math_in_data!r}"), 400
 
         record = _resolve_paper(paper_id)
         if not record:
@@ -135,9 +149,13 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify(error=f"Re-parse failed: {e}"), 500
 
-        # Build all sets in memory, verify each, and zip them up.
         safe_base = _safe_filename(display_name)
         buf = io.BytesIO()
+
+        # Integrity report: one line per set documenting what was generated
+        # and confirming verify_set() passed against the source.
+        integrity_lines = []
+
         manifest_lines = [
             f"Paper: {display_name}",
             f"Source: {source_filename}",
@@ -146,12 +164,21 @@ def create_app() -> Flask:
             f"Shuffle questions: {shuffle_q}",
             f"Shuffle options: {shuffle_o}",
             f"Output format: {fmt}",
+            f"Math in Word (KaTeX → ...): {math_in_docx}",
+            f"Math in CSV/XLSX: {math_in_data}",
             f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "Reproducibility: shuffles are seeded by (paper_id, set_number, mode);",
             "the same source + set number always produces the same paper.",
             "",
+            "Integrity:",
+            "  Each set is verified BEFORE writing — the option text at the",
+            "  shuffled answer position must equal the original correct option",
+            "  text, all questions must appear exactly once with their original",
+            "  options intact (as a multiset), and SLs must be 1..N.",
+            "",
         ]
+
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for n in range(1, n_sets + 1):
                 shuffled = make_set(
@@ -163,6 +190,7 @@ def create_app() -> Flask:
                 )
                 try:
                     verify_set(questions, shuffled)
+                    integrity_lines.append(f"  Set {n:02d}: OK ({len(shuffled)} Qs)")
                 except AssertionError as e:
                     return jsonify(
                         error=f"Integrity check failed for set {n}: {e}"
@@ -170,7 +198,11 @@ def create_app() -> Flask:
 
                 set_title = f"{display_name} — Set {n}"
                 try:
-                    data, ext = write_set(shuffled, fmt, title=set_title)
+                    data, ext = write_set(
+                        shuffled, fmt, title=set_title,
+                        math_in_docx=math_in_docx,
+                        math_in_data=math_in_data,
+                    )
                 except Exception as e:
                     return jsonify(error=f"Set {n} writer error: {e}"), 500
 
@@ -180,7 +212,10 @@ def create_app() -> Flask:
                 if persist:
                     store.record_set(paper_id, n, shuffle_q, shuffle_o)
 
-            zf.writestr("MANIFEST.txt", "\n".join(manifest_lines))
+            zf.writestr(
+                "MANIFEST.txt",
+                "\n".join(manifest_lines + integrity_lines)
+            )
 
         buf.seek(0)
         download_name = f"{safe_base}_sets.zip"

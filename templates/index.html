@@ -79,7 +79,7 @@
           <label class="radio">
             <input type="radio" name="format" value="docx_normal" checked />
             <span>Word — Normal layout
-              <span class="muted">(question table + answer sheet)</span></span>
+              <span class="muted">(question table with 2×2 option grid + answer sheet)</span></span>
           </label>
           <label class="radio">
             <input type="radio" name="format" value="docx_database" />
@@ -88,11 +88,44 @@
           </label>
           <label class="radio">
             <input type="radio" name="format" value="xlsx" />
-            <span>Excel <span class="muted">(KaTeX preserved as text)</span></span>
+            <span>Excel</span>
           </label>
           <label class="radio">
             <input type="radio" name="format" value="csv" />
-            <span>CSV <span class="muted">(KaTeX preserved as text)</span></span>
+            <span>CSV</span>
+          </label>
+        </fieldset>
+
+        <fieldset class="field" id="math-docx-fieldset">
+          <legend>Math rendering in Word output</legend>
+          <label class="radio">
+            <input type="radio" name="math_in_docx" value="equation" checked />
+            <span>Render KaTeX as real Word equations
+              <span class="muted">(recommended — needs pandoc installed)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="math_in_docx" value="unicode" />
+            <span>Convert to plain Unicode
+              <span class="muted">(e.g. <code>x^2</code> → <code>x²</code>; falls back to <code>$…$</code> if too complex)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="math_in_docx" value="text" />
+            <span>Keep KaTeX source as-is
+              <span class="muted">(<code>$\dfrac{a}{b}$</code> stays as text)</span></span>
+          </label>
+        </fieldset>
+
+        <fieldset class="field" id="math-data-fieldset">
+          <legend>Math format in Excel / CSV output</legend>
+          <label class="radio">
+            <input type="radio" name="math_in_data" value="katex" checked />
+            <span>Keep as KaTeX
+              <span class="muted">(round-trips losslessly into Word later)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="math_in_data" value="unicode" />
+            <span>Best-effort Unicode
+              <span class="muted">(simpler to read; complex math stays as <code>$…$</code>)</span></span>
           </label>
         </fieldset>
 

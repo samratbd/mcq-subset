@@ -8,19 +8,25 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
 from ..models import Question
+from ..math_utils import render_text
 
 
 HEADER = ["title", "type", "option1", "option2", "option3", "option4",
           "answer", "explanation"]
 
 
-def write_xlsx(questions: List[Question]) -> bytes:
+def write_xlsx(questions: List[Question], *, math_mode: str = "katex") -> bytes:
+    if math_mode not in ("katex", "unicode"):
+        raise ValueError(f"unknown math_mode for XLSX: {math_mode!r}")
+
+    def m(s: str) -> str:
+        return render_text(s, math_mode)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Questions"
 
     ws.append(HEADER)
-    # Header styling: bold, top-aligned
     for col_idx in range(1, len(HEADER) + 1):
         cell = ws.cell(row=1, column=col_idx)
         cell.font = Font(bold=True)
@@ -28,19 +34,17 @@ def write_xlsx(questions: List[Question]) -> bytes:
 
     for q in questions:
         ws.append([
-            q.question,
+            m(q.question),
             "MCQ",
-            q.options[0], q.options[1], q.options[2], q.options[3],
+            m(q.options[0]), m(q.options[1]), m(q.options[2]), m(q.options[3]),
             q.answer_index + 1,
-            q.explanation,
+            m(q.explanation),
         ])
 
-    # Reasonable column widths; the content can still wrap.
     widths = [60, 8, 28, 28, 28, 28, 8, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
 
-    # Enable wrapping on body rows for the long text columns.
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")

@@ -33,23 +33,78 @@ _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 
 
+def _omath_to_katex_string(omath_el) -> str:
+    """Convert an <m:oMath> element to a `$...$` KaTeX string when possible.
+
+    Bulletproof: any exception (no pandoc, subprocess crash, malformed XML,
+    None return from a downstream helper, etc.) is swallowed and we fall
+    through to the Unicode-text join of inner <m:t> nodes — so the math
+    text is never lost and the parse never crashes on an upload.
+
+    Returns a string. Never returns None.
+    """
+    # 1) Try the pandoc-backed OMML → LaTeX path.
+    try:
+        from ..math_utils import omml_to_latex
+        xml = etree.tostring(omath_el, encoding="unicode")
+        if isinstance(xml, str):
+            latex = omml_to_latex(xml)
+            if latex:
+                return f"${latex}$"
+    except Exception:
+        # pandoc not installed, broken, timeout, or anything else — fall through.
+        pass
+
+    # 2) Fallback: concatenate <m:t> text nodes.
+    try:
+        return "".join(
+            (t.text or "") for t in omath_el.iter(f"{{{_M_NS}}}t")
+        )
+    except Exception:
+        return ""
+
+
 def _paragraph_text(p_element) -> str:
-    """Concatenate every text node inside a paragraph in document order.
+    """Concatenate every text node inside a paragraph, in document order.
 
     Picks up:
       - normal <w:t> runs
-      - math <m:t> runs (inside <m:oMath> equation objects)
+      - math equation objects (<m:oMath>): rendered as `$LATEX$` when pandoc
+        is available, otherwise as the concatenation of inner <m:t> nodes.
 
-    Iterating with .iter() walks in document order, so a sentence that
-    interleaves normal text and equations reads correctly end-to-end.
+    Equations are *captured as units* so KaTeX delimiters survive. Naive
+    iteration over <w:t> + <m:t> would lose the math boundary, leaving
+    LaTeX fragments inside what looks like prose.
     """
     parts = []
     w_t = f"{{{_W_NS}}}t"
-    m_t = f"{{{_M_NS}}}t"
-    for node in p_element.iter():
-        if node.tag in (w_t, m_t) and node.text:
-            parts.append(node.text)
-    return "".join(parts)
+    m_omath = f"{{{_M_NS}}}oMath"
+
+    def walk(node):
+        try:
+            children = list(node)
+        except Exception:
+            return
+        for child in children:
+            tag = getattr(child, "tag", None)
+            if not isinstance(tag, str):
+                # Comments, processing instructions, etc. — recurse over them
+                # in case they contain elements (rare, but safe).
+                try:
+                    walk(child)
+                except Exception:
+                    pass
+                continue
+            if tag == w_t:
+                if child.text:
+                    parts.append(child.text)
+            elif tag == m_omath:
+                parts.append(_omath_to_katex_string(child) or "")
+            else:
+                walk(child)
+
+    walk(p_element)
+    return "".join(p for p in parts if p)
 
 
 def _cell_paragraph_texts(tc_element) -> List[str]:
@@ -93,6 +148,25 @@ def parse_docx_bytes(data: bytes) -> List[Question]:
 
 # --- Normal layout -----------------------------------------------------------
 
+def _strip_answer_letter_prefix(expl: str) -> str:
+    """Strip a redundant leading 'X;' / 'X)' / 'X.' prefix from an explanation.
+
+    Both source layouts (Normal and Database) tend to start the explanation
+    cell with the answer letter — e.g. "D; Is-377; ...". That letter is
+    redundant with the dedicated answer column / output prefix. When the
+    paper is shuffled, the redundant copy would otherwise stay frozen at
+    the *original* letter and contradict the shuffled answer. We strip it
+    here so the model holds just the body of the explanation.
+    """
+    import re
+    if not expl:
+        return ""
+    m = re.match(r"^\s*([A-Da-d])\s*[;:.)]\s*(.*)$", expl, re.DOTALL)
+    if m:
+        return m.group(2).strip()
+    return expl.strip()
+
+
 def _parse_normal(q_table, ans_table) -> List[Question]:
     """Walk a 2-col question table + 3-col answer sheet."""
     # Build SL → (letter, explanation) map from the answer sheet.
@@ -105,7 +179,7 @@ def _parse_normal(q_table, ans_table) -> List[Question]:
             continue
         sl_raw = _cell_combined_text(cells[0]._tc).strip().rstrip(".")
         letter = _cell_combined_text(cells[1]._tc).strip().upper()
-        expl = _cell_combined_text(cells[2]._tc).strip()
+        expl = _strip_answer_letter_prefix(_cell_combined_text(cells[2]._tc))
         if not sl_raw or not letter:
             continue
         try:
@@ -248,14 +322,41 @@ def _split_question_and_options(paragraphs: List[str], sl_int: int):
 # --- Database layout ---------------------------------------------------------
 
 def _cell_combined_text(tc_element) -> str:
-    """Total text content of a cell: <w:t> + <m:t> in document order."""
-    w_t = f"{{{_W_NS}}}t"
-    m_t = f"{{{_M_NS}}}t"
+    """Total text content of a cell.
+
+    Same equation-aware walker as _paragraph_text — equations are emitted
+    as `$LATEX$` strings, with plain `<w:t>` runs as Unicode text.
+
+    Bulletproof: comments / PIs / unexpected node types are skipped silently
+    so a malformed cell can't crash the whole parse.
+    """
     parts = []
-    for node in tc_element.iter():
-        if node.tag in (w_t, m_t) and node.text:
-            parts.append(node.text)
-    return "".join(parts)
+    w_t = f"{{{_W_NS}}}t"
+    m_omath = f"{{{_M_NS}}}oMath"
+
+    def walk(node):
+        try:
+            children = list(node)
+        except Exception:
+            return
+        for child in children:
+            tag = getattr(child, "tag", None)
+            if not isinstance(tag, str):
+                try:
+                    walk(child)
+                except Exception:
+                    pass
+                continue
+            if tag == w_t:
+                if child.text:
+                    parts.append(child.text)
+            elif tag == m_omath:
+                parts.append(_omath_to_katex_string(child) or "")
+            else:
+                walk(child)
+
+    walk(tc_element)
+    return "".join(p for p in parts if p)
 
 
 def _parse_database(table) -> List[Question]:
@@ -275,8 +376,10 @@ def _parse_database(table) -> List[Question]:
             raise ValueError(f"Database row {r_idx}: answer cell is empty")
 
         # Last cell format: "A; Is-377; (...) explanation..."
-        # Take the first ; segment, strip, and treat that as the letter.
-        letter_part, sep, rest = last_cell.partition(";")
+        # The leading letter is redundant with the separate answer column we
+        # store in the model — strip it via the shared helper so it doesn't
+        # contradict the shuffled answer in output.
+        letter_part, sep, _rest = last_cell.partition(";")
         letter = letter_part.strip().upper()
         if letter not in ("A", "B", "C", "D"):
             raise ValueError(
@@ -287,7 +390,7 @@ def _parse_database(table) -> List[Question]:
             ans_idx = letter_to_idx(letter)
         except ValueError as e:
             raise ValueError(f"Database row {r_idx}: {e}") from None
-        explanation = rest.strip() if sep else ""
+        explanation = _strip_answer_letter_prefix(last_cell)
 
         if any(o == "" for o in opts):
             raise ValueError(f"Database row {r_idx}: one of the options is empty")

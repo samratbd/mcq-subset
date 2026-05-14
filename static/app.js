@@ -92,13 +92,16 @@ $("#generate-form").addEventListener("submit", async (ev) => {
     return;
   }
 
+  const fmt = document.querySelector('input[name="format"]:checked').value;
   const payload = {
     paper_id: state.paper_id,
     n_sets,
     shuffle_questions: $("#shuffle-questions").checked,
     shuffle_options:   $("#shuffle-options").checked,
-    format: document.querySelector('input[name="format"]:checked').value,
+    format: fmt,
     persist: state.persisted,
+    math_in_docx: document.querySelector('input[name="math_in_docx"]:checked').value,
+    math_in_data: document.querySelector('input[name="math_in_data"]:checked').value,
   };
 
   const btn = $("#generate-btn");
@@ -132,6 +135,21 @@ $("#generate-form").addEventListener("submit", async (ev) => {
     btn.textContent = "Generate & download ZIP";
   }
 });
+
+// Show only the math fieldset that applies to the chosen output format.
+function refreshMathFieldsets() {
+  const fmt = document.querySelector('input[name="format"]:checked')?.value;
+  const isDocx = fmt === "docx_normal" || fmt === "docx_database";
+  const docxFs = $("#math-docx-fieldset");
+  const dataFs = $("#math-data-fieldset");
+  if (docxFs) docxFs.hidden = !isDocx;
+  if (dataFs) dataFs.hidden = isDocx;
+}
+document.addEventListener("change", (e) => {
+  if (e.target && e.target.name === "format") refreshMathFieldsets();
+});
+// Initial state once the page is interactive
+refreshMathFieldsets();
 
 $("#reset-btn").addEventListener("click", () => {
   state.paper_id = null;
