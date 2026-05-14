@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MCQ Shuffler</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <h1>MCQ&nbsp;Shuffler</h1>
+    <p class="tagline">Generate up to 20 shuffled sets from a single question paper.</p>
+    {% if not pandoc_available %}
+      <div class="warn">
+        <strong>Note:</strong> pandoc is not installed. KaTeX in your inputs will
+        round-trip fine through CSV/XLSX, but Word output will keep <code>$…$</code>
+        as plain text instead of rendering equations. Install pandoc and restart
+        for proper Word math.
+      </div>
+    {% endif %}
+  </header>
+
+  <main>
+    <!-- ============ STEP 1: UPLOAD ============ -->
+    <section class="card" id="step-upload">
+      <h2>1. Upload your question paper</h2>
+      <p class="hint">
+        Supported formats: <strong>.csv</strong>, <strong>.xlsx</strong>, <strong>.docx</strong>.
+        Word documents in either Normal or Database layout are detected automatically.
+      </p>
+      <form id="upload-form">
+        <label class="field">
+          <span>File</span>
+          <input type="file" name="file" id="file-input"
+                 accept=".csv,.xlsx,.docx" required />
+        </label>
+        <label class="field">
+          <span>Display name (optional)</span>
+          <input type="text" name="name" id="paper-name"
+                 placeholder="e.g. Physics — Chapter 4" />
+        </label>
+        <label class="field checkbox">
+          <input type="checkbox" id="persist" />
+          <span>Save in local database (so I can regenerate sets later)</span>
+        </label>
+        <button type="submit" id="upload-btn" class="primary">Upload & parse</button>
+      </form>
+      <div id="upload-result" class="result" hidden></div>
+      <div id="upload-error" class="error" hidden></div>
+    </section>
+
+    <!-- ============ STEP 2: GENERATE ============ -->
+    <section class="card" id="step-generate" hidden>
+      <h2>2. Generate shuffled sets</h2>
+
+      <div class="paper-summary" id="paper-summary"></div>
+
+      <form id="generate-form">
+        <label class="field">
+          <span>Number of sets <span class="muted">(1–20)</span></span>
+          <input type="number" id="n-sets" min="1" max="20" value="5" required />
+        </label>
+
+        <fieldset class="field">
+          <legend>Shuffle mode</legend>
+          <label class="checkbox">
+            <input type="checkbox" id="shuffle-questions" checked />
+            <span>Shuffle question order</span>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="shuffle-options" checked />
+            <span>Shuffle options inside each question
+              <span class="muted">(answer letter is remapped automatically)</span></span>
+          </label>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>Output format</legend>
+          <label class="radio">
+            <input type="radio" name="format" value="docx_normal" checked />
+            <span>Word — Normal layout
+              <span class="muted">(question table + answer sheet)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="format" value="docx_database" />
+            <span>Word — Database layout
+              <span class="muted">(single 8-column table)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="format" value="xlsx" />
+            <span>Excel <span class="muted">(KaTeX preserved as text)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="format" value="csv" />
+            <span>CSV <span class="muted">(KaTeX preserved as text)</span></span>
+          </label>
+        </fieldset>
+
+        <button type="submit" id="generate-btn" class="primary">Generate & download ZIP</button>
+        <button type="button" id="reset-btn" class="secondary">Start over</button>
+      </form>
+      <div id="generate-error" class="error" hidden></div>
+      <div id="generate-status" class="status" hidden></div>
+    </section>
+
+    <!-- ============ SAVED PAPERS ============ -->
+    <section class="card" id="step-saved">
+      <h2>Saved papers</h2>
+      <p class="hint">Papers you saved with the database toggle. Click one to reuse it.</p>
+      <div id="saved-list" class="saved-list"><em class="muted">Loading…</em></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Runs locally on your machine. No data leaves this computer.</p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

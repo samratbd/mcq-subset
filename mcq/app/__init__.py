@@ -1,0 +1,1 @@
+"""MCQ Shuffler application package."""
