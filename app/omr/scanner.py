@@ -306,6 +306,10 @@ def render_review_image(image_bytes: bytes,
         green  — clearly empty
         red    — clearly filled (= selected as the answer)
         orange — ambiguous (flagged for review)
+
+    Plus dashed BLUE outlines showing where the scanner expects to find
+    the Roll Number block, SET column, and each question block. Useful
+    for visually verifying template alignment.
     """
     try:
         gray = robust_decode(image_bytes)
@@ -322,6 +326,7 @@ def render_review_image(image_bytes: bytes,
 
     flagged_qs = {item for item in result.review_items if item.startswith("Q")}
 
+    # --- Answer bubbles ----------------------------------------------------
     for q_idx, positions in enumerate(template.answer_bubbles):
         flagged = f"Q{q_idx + 1}" in flagged_qs
         selected_letters = set()
@@ -332,12 +337,87 @@ def render_review_image(image_bytes: bytes,
         for opt_idx, (x, y) in enumerate(positions):
             letter = "ABCD"[opt_idx]
             if flagged:
-                color = (0, 140, 255)        # orange (BGR)
+                color = (0, 140, 255)        # orange
             elif letter in selected_letters:
                 color = (0, 0, 255)          # red — selected
             else:
                 color = (0, 200, 0)          # green — empty
             cv2.circle(canvas, (x, y), r, color, 2)
+
+    # --- Roll number bubbles (cyan) ----------------------------------------
+    for d_idx, col_positions in enumerate(template.roll_bubbles):
+        selected_idx = None
+        if d_idx < len(result.roll_number):
+            ch = result.roll_number[d_idx]
+            if ch.isdigit():
+                selected_idx = int(ch)
+        for digit_val, (x, y) in enumerate(col_positions):
+            if digit_val == selected_idx:
+                color = (0, 0, 255)          # red — selected digit
+            else:
+                color = (200, 200, 0)        # cyan — empty
+            cv2.circle(canvas, (x, y), r, color, 2)
+
+    # --- SET bubbles (magenta) ---------------------------------------------
+    selected_set_idx = None
+    if result.set_letter and result.set_letter != "?":
+        selected_set_idx = template.set_letters.index(result.set_letter)
+    for s_idx, (x, y) in enumerate(template.set_bubbles):
+        color = (0, 0, 255) if s_idx == selected_set_idx else (255, 0, 255)
+        cv2.circle(canvas, (x, y), r, color, 2)
+
+    # --- Section labels (dashed blue boxes + names) ------------------------
+    def _draw_section_box(name: str, positions: list[tuple[int, int]],
+                          color=(255, 80, 0), pad: int = 30):
+        if not positions:
+            return
+        xs = [p[0] for p in positions]
+        ys = [p[1] for p in positions]
+        x0, x1 = min(xs) - pad, max(xs) + pad
+        y0, y1 = min(ys) - pad, max(ys) + pad
+        # Dashed rectangle
+        for x in range(x0, x1, 16):
+            cv2.line(canvas, (x, y0), (min(x + 8, x1), y0), color, 2)
+            cv2.line(canvas, (x, y1), (min(x + 8, x1), y1), color, 2)
+        for y in range(y0, y1, 16):
+            cv2.line(canvas, (x0, y), (x0, min(y + 8, y1)), color, 2)
+            cv2.line(canvas, (x1, y), (x1, min(y + 8, y1)), color, 2)
+        # Label (small, above the box)
+        label_y = max(20, y0 - 8)
+        cv2.putText(canvas, name, (x0 + 4, label_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+    # Roll Number box
+    roll_positions = [p for col in template.roll_bubbles for p in col]
+    _draw_section_box("ROLL NUMBER", roll_positions)
+
+    # SET box
+    _draw_section_box("SET", template.set_bubbles)
+
+    # Question blocks (one box per logical block)
+    n = template.n_questions
+    if n == 50:
+        # Q1-25 and Q26-50
+        block1 = [p for q in template.answer_bubbles[:25] for p in q]
+        block2 = [p for q in template.answer_bubbles[25:] for p in q]
+        _draw_section_box("Q01-25", block1)
+        _draw_section_box("Q26-50", block2)
+    elif n == 100:
+        # 5 blocks of 20
+        for blk in range(5):
+            start = blk * 20
+            positions = [p for q in template.answer_bubbles[start:start + 20] for p in q]
+            label = f"Q{start + 1:02d}-{start + 20}"
+            _draw_section_box(label, positions)
+
+    # Caption with summary at top-left
+    summary = (
+        f"Roll={result.roll_number}  SET={result.set_letter}  "
+        f"Conf={result.confidence * 100:.1f}%  "
+        f"Review={'YES' if result.needs_review else 'no'}"
+    )
+    cv2.putText(canvas, summary, (template.bubble_radius, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 200), 2, cv2.LINE_AA)
 
     H, W = canvas.shape[:2]
     if H > max_height:

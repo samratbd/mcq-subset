@@ -72,8 +72,12 @@ def _build_50q() -> SheetTemplate:
 def _build_100q() -> SheetTemplate:
     """100-question template (landscape 2500 × 1700).
 
-    5 blocks of 20 questions; each block has 4 evenly-spaced answer bubbles.
-    Y values measured by pixel projection through a clean bubble column.
+    All coordinates measured by pixel-projection on the user's blank
+    template (MCQ100202605150001.bmp), then verified against filled scans:
+
+      - Roll number: 6 columns × 10 rows (digits 0-9)
+      - SET:         1 column × 6 rows (letters A-F)
+      - 5 question blocks (Q01-20, Q21-40, ...), each 4 columns × 20 rows
     """
     t = SheetTemplate(
         name="omr_100",
@@ -84,23 +88,27 @@ def _build_100q() -> SheetTemplate:
         snap_search_radius=15,
     )
 
+    # ROLL NUMBER — 6 columns × 10 digit rows (Y stride 75, matching Q rows)
     roll_xs = [106, 178, 250, 323, 395, 477]
-    # 10 digit rows, Y stride 84 (measured precisely)
-    roll_ys = [154, 238, 322, 406, 490, 574, 658, 742, 826, 910]
+    roll_ys = [205, 280, 355, 430, 505, 580, 655, 730, 805, 880]
     t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    t.set_bubbles = [(626, y) for y in roll_ys[:6]]
+    # SET — 1 column × 6 letter rows (A-F), same Y as first 6 roll rows
+    t.set_bubbles = [(580, y) for y in roll_ys[:6]]
 
-    # 20 rows, Y start 157, stride 75 (measured against blank to ±2 px)
-    q_y_start, q_y_stride = 157, 75
+    # Question rows — 20 rows shared across all 5 blocks
+    q_y_start, q_y_stride = 156, 75
     q_ys = [q_y_start + i * q_y_stride for i in range(20)]
-    # 5 blocks, each 4 bubble columns at stride 75, block-to-block offset 345
+
+    # 5 question blocks. X positions measured directly from the blank.
+    # Note the strides within a block are slightly uneven (64-68-74 px)
+    # — this matches the actual printed bubble positions, not a uniform grid.
     block_xs = [
-        [790, 865, 940, 1015],     # Q01-20
-        [1135, 1210, 1285, 1360],  # Q21-40
-        [1480, 1555, 1630, 1705],  # Q41-60
-        [1825, 1900, 1975, 2050],  # Q61-80
-        [2170, 2245, 2320, 2395],  # Q81-100
+        [731, 795, 863, 937],      # Q01-20:   A B C D
+        [1092, 1156, 1224, 1298],  # Q21-40
+        [1454, 1517, 1586, 1660],  # Q41-60
+        [1814, 1879, 1946, 2021],  # Q61-80
+        [2175, 2239, 2307, 2399],  # Q81-100
     ]
 
     answer_bubbles = []
