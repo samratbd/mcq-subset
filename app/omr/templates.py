@@ -36,36 +36,43 @@ class SheetTemplate:
 def _build_50q() -> SheetTemplate:
     """50-question template (portrait 1400 × 2080).
 
-    All bubble coordinates measured against the user's blank
-    (MCQ050202605150002.bmp) to pixel precision. Each printed bubble has
-    a template circle centred to within ±2 px.
+    Coordinates measured against `MCQ050202605150002.bmp` using the
+    OUTER-CORNER fiducial warp (each fiducial's outermost corner maps to
+    the canonical image corner, giving zero margin).
+
+    Bubble radius = 18 px (actual printed bubble diameter ≈ 37 px).
     """
     t = SheetTemplate(
         name="omr_50",
         canonical_w=1400,
         canonical_h=2080,
         n_questions=50,
-        bubble_radius=22,
-        snap_search_radius=18,
+        bubble_radius=18,
+        snap_search_radius=15,
     )
 
-    # ROLL NUMBER — 6 columns × 10 rows.
-    # X stride ~83, Y stride ~78.
-    roll_xs = [81, 165, 247, 330, 413, 496]
-    roll_ys = [199, 277, 355, 434, 512, 590, 668, 747, 825, 903]
+    # ROLL NUMBER — 6 columns × 10 digit rows.
+    # X measured at digit-0 row: 62, 148, 233, 318, 404, 489
+    # Y from 181 to ~. Stride = roll stride (matches first 10 of SET-like grid).
+    roll_xs = [62, 148, 233, 318, 404, 489]
+    # 10 Y values: from 181 to 909, evenly spaced (stride ~81)
+    roll_y_start, roll_y_end = 181, 909
+    roll_ys = [int(round(roll_y_start + i * (roll_y_end - roll_y_start) / 9))
+               for i in range(10)]
     t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    # SET — 1 column at X=578, same Y stride as roll
-    t.set_bubbles = [(578, y) for y in roll_ys[:6]]
+    # SET — 1 column at X=573, same Y values as first 6 roll rows
+    t.set_bubbles = [(573, y) for y in roll_ys[:6]]
 
-    # Question rows — 25 rows from Y=118 to Y=1996, stride ~78.25
-    q_y_start, q_y_end = 118, 1996
-    q_ys = [int(round(q_y_start + i * (q_y_end - q_y_start) / 24)) for i in range(25)]
+    # Question rows — 25 rows from Y=99 to Y=2018, stride ~80.0
+    q_y_start, q_y_end = 99, 2018
+    q_ys = [int(round(q_y_start + i * (q_y_end - q_y_start) / 24))
+            for i in range(25)]
 
-    # Q1-25 (left column): 4 options at stride ~80
-    q1_25_xs = [711, 791, 870, 951]
-    # Q26-50 (right column): same stride, shifted right by ~361
-    q26_50_xs = [1072, 1152, 1232, 1312]
+    # Q1-25 X: 710, 793, 873, 957  (stride ~82)
+    q1_25_xs = [710, 793, 873, 957]
+    # Q26-50 X: 1083, 1165, 1248, 1330
+    q26_50_xs = [1083, 1165, 1248, 1330]
 
     answer_bubbles = []
     for y in q_ys:
@@ -80,45 +87,47 @@ def _build_50q() -> SheetTemplate:
 def _build_100q() -> SheetTemplate:
     """100-question template (landscape 2500 × 1700).
 
-    All bubble coordinates measured against the user's blank
-    (MCQ100202605150002.bmp). Pixel-perfect alignment verified.
-
-    Layout:
-      Roll: 6 columns × 10 rows
-      SET:  1 column × 6 rows (A-F)
-      Q01-100: 5 blocks of 4 columns × 20 rows
+    Coordinates measured against `MCQ100202605150002.bmp` using the
+    OUTER-CORNER fiducial warp. Bubble radius = 18 px.
     """
     t = SheetTemplate(
         name="omr_100",
         canonical_w=2500,
         canonical_h=1700,
         n_questions=100,
-        bubble_radius=22,
-        snap_search_radius=18,
+        bubble_radius=18,
+        snap_search_radius=15,
     )
 
-    # ROLL — 6 columns × 10 rows. X stride ~74-75, Y stride ~75.6
-    roll_xs = [103, 178, 255, 323, 398, 473]
-    roll_y_start, roll_y_end = 198, 879
+    # ROLL NUMBER — 6 columns × 10 rows.
+    # Measured at digit-0 row (Y≈179): X = 81, 158, 236, 306, 384, 458
+    # NOTE: col2-col3 stride (70) is smaller than others (~78); this matches
+    # the actual printed layout (slight non-uniform spacing).
+    roll_xs = [81, 158, 236, 306, 384, 458]
+    # Y from 179 to 877, stride ~77.5
+    roll_y_start, roll_y_end = 179, 877
     roll_ys = [int(round(roll_y_start + i * (roll_y_end - roll_y_start) / 9))
                for i in range(10)]
     t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    # SET — 1 column at X=580, first 6 roll Y values
-    t.set_bubbles = [(580, y) for y in roll_ys[:6]]
+    # SET — 1 column at X=568, Y from 177 to 564
+    set_y_start, set_y_end = 177, 564
+    set_ys = [int(round(set_y_start + i * (set_y_end - set_y_start) / 5))
+              for i in range(6)]
+    t.set_bubbles = [(568, y) for y in set_ys]
 
-    # Question rows — 20 rows from Y=154 to Y=1584
-    q_y_start, q_y_end = 154, 1584
+    # Question rows — 20 rows from Y=135 to Y=1604
+    q_y_start, q_y_end = 135, 1604
     q_ys = [int(round(q_y_start + i * (q_y_end - q_y_start) / 19))
             for i in range(20)]
 
-    # 5 question blocks. X positions measured precisely per block.
+    # 5 blocks of 4 columns each, measured precisely
     block_xs = [
-        [731, 795, 863, 937],      # Q01-20
-        [1091, 1156, 1223, 1298],  # Q21-40
-        [1454, 1517, 1586, 1659],  # Q41-60
-        [1813, 1878, 1946, 2021],  # Q61-80
-        [2174, 2239, 2307, 2393],  # Q81-100
+        [721, 787, 855, 931],      # Q01-20
+        [1087, 1154, 1223, 1299],  # Q21-40
+        [1458, 1522, 1592, 1667],  # Q41-60
+        [1823, 1890, 1959, 2035],  # Q61-80
+        [2190, 2257, 2327, 2413],  # Q81-100
     ]
 
     answer_bubbles = []

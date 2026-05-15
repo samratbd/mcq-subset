@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 
-FIDUCIAL_MARGIN = 40
+FIDUCIAL_MARGIN = 0  # Now using outer corners — no margin needed
 
 
 def robust_decode(image_bytes: bytes) -> np.ndarray:
@@ -50,9 +50,18 @@ def _binarize_for_fiducials(gray: np.ndarray) -> np.ndarray:
 
 
 def detect_fiducials(gray: np.ndarray) -> Dict[str, Tuple[float, float]]:
-    """Find the 4 corner square markers.
+    """Find the 4 corner square markers and return their OUTER corners.
 
-    Returns {'TL', 'TR', 'BL', 'BR'} → centroid (x, y).
+    Returns {'TL', 'TR', 'BL', 'BR'} → (x, y) of each fiducial's outermost
+    corner (the corner of the bounding box closest to the paper's corner).
+
+    Using outer corners (instead of centroids) gives a more stable reference
+    because:
+      * The outermost edge of each fiducial square is sharply defined.
+      * Centroids shift slightly with print/scan ink-spread variation.
+      * The 4 outer corners trace the actual outer rectangle of the OMR.
+
+    Raises ValueError if 4 fiducials cannot be located reliably.
     """
     H, W = gray.shape[:2]
     bw = _binarize_for_fiducials(gray)
@@ -69,7 +78,7 @@ def detect_fiducials(gray: np.ndarray) -> Dict[str, Tuple[float, float]]:
         if area < 300:
             continue
         cx, cy = float(centroids[i][0]), float(centroids[i][1])
-        candidates.append((cx, cy, w, h, area))
+        candidates.append((x, y, w, h, area, cx, cy))
 
     if len(candidates) < 4:
         raise ValueError(
@@ -85,22 +94,28 @@ def detect_fiducials(gray: np.ndarray) -> Dict[str, Tuple[float, float]]:
     for name, (tx, ty) in corner_targets.items():
         in_quadrant = [
             c for c in remaining
-            if ((c[0] < W / 2) == (tx < W / 2))
-            and ((c[1] < H / 2) == (ty < H / 2))
+            if ((c[5] < W / 2) == (tx < W / 2))
+            and ((c[6] < H / 2) == (ty < H / 2))
         ]
         pool = in_quadrant or remaining
-        best = min(pool, key=lambda c: (c[0] - tx) ** 2 + (c[1] - ty) ** 2)
-        dist = np.hypot(best[0] - tx, best[1] - ty)
+        # Pick the fiducial whose CENTROID is nearest the paper corner
+        best = min(pool, key=lambda c: (c[5] - tx) ** 2 + (c[6] - ty) ** 2)
+        x, y, w, h, area, cx, cy = best
+        dist = np.hypot(cx - tx, cy - ty)
         if dist > 0.20 * np.hypot(W, H):
             raise ValueError(
                 f"No fiducial near {name} corner "
                 f"(closest is {dist:.0f}px from the corner)."
             )
-        fiducials[name] = (best[0], best[1])
+        # OUTER corner = corner of bbox closest to paper corner
+        if name == "TL":   outer = (float(x), float(y))
+        elif name == "TR": outer = (float(x + w - 1), float(y))
+        elif name == "BL": outer = (float(x), float(y + h - 1))
+        else:              outer = (float(x + w - 1), float(y + h - 1))
+        fiducials[name] = outer
         remaining.remove(best)
 
-    # Sanity-check that the 4 detected corners form a roughly-rectangular
-    # quadrilateral. Off-axis scans get heavily warped without this check.
+    # Sanity-check quadrilateral is roughly rectangular
     tl, tr = fiducials["TL"], fiducials["TR"]
     bl, br = fiducials["BL"], fiducials["BR"]
     top = np.hypot(tr[0] - tl[0], tr[1] - tl[1])
@@ -125,17 +140,22 @@ def warp_to_canonical(
     fiducials: Dict[str, Tuple[float, float]],
     target_w: int,
     target_h: int,
-    margin: int = FIDUCIAL_MARGIN,
+    margin: int = 0,
 ) -> np.ndarray:
+    """Perspective-warp so the fiducial OUTER corners sit at the canvas corners.
+
+    Default margin is 0 — the 4 fiducial outer corners map to
+    (0,0), (W-1,0), (0,H-1), (W-1,H-1).
+    """
     src = np.float32([
         fiducials["TL"], fiducials["TR"],
         fiducials["BL"], fiducials["BR"],
     ])
     dst = np.float32([
         [margin, margin],
-        [target_w - margin, margin],
-        [margin, target_h - margin],
-        [target_w - margin, target_h - margin],
+        [target_w - 1 - margin, margin],
+        [margin, target_h - 1 - margin],
+        [target_w - 1 - margin, target_h - 1 - margin],
     ])
     M = cv2.getPerspectiveTransform(src, dst)
     return cv2.warpPerspective(

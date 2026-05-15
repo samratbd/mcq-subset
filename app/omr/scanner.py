@@ -344,6 +344,9 @@ def render_review_image(image_bytes: bytes,
         cv2.line(canvas, corners[i], corners[(i + 1) % 4], (0, 220, 220), 3)
 
     # --- Answer bubbles ----------------------------------------------------
+    # Each option gets a CLEAR circular outline so it's easy to verify
+    # alignment at a glance. Selected (filled) bubbles get an extra inner
+    # ring at smaller radius for visual emphasis.
     for q_idx, positions in enumerate(template.answer_bubbles):
         flagged = f"Q{q_idx + 1}" in flagged_qs
         selected_letters = set()
@@ -360,6 +363,9 @@ def render_review_image(image_bytes: bytes,
             else:
                 color = (0, 200, 0)          # green — empty
             cv2.circle(canvas, (x, y), r, color, 2)
+            if letter in selected_letters and not flagged:
+                # Inner ring for emphasis on selected option
+                cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
     # --- Roll number bubbles (cyan) ----------------------------------------
     for d_idx, col_positions in enumerate(template.roll_bubbles):
@@ -374,6 +380,8 @@ def render_review_image(image_bytes: bytes,
             else:
                 color = (200, 200, 0)        # cyan — empty
             cv2.circle(canvas, (x, y), r, color, 2)
+            if digit_val == selected_idx:
+                cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
     # --- SET bubbles (magenta) ---------------------------------------------
     selected_set_idx = None
@@ -382,10 +390,15 @@ def render_review_image(image_bytes: bytes,
     for s_idx, (x, y) in enumerate(template.set_bubbles):
         color = (0, 0, 255) if s_idx == selected_set_idx else (255, 0, 255)
         cv2.circle(canvas, (x, y), r, color, 2)
+        if s_idx == selected_set_idx:
+            cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
     # --- Section labels (dashed blue boxes + names) ------------------------
+    # The OMR has its own printed rectangles around each section. We draw our
+    # dashed-blue boxes WITHIN those printed rectangles so the two don't
+    # overlap. Padding picked tight enough that bubbles are well inside.
     def _draw_section_box(name: str, positions: list,
-                          color=(255, 80, 0), pad: int = 30):
+                          color=(255, 80, 0), pad: int = 15):
         if not positions:
             return
         xs = [p[0] for p in positions]
