@@ -360,7 +360,17 @@ def _cell_combined_text(tc_element) -> str:
 
 
 def _parse_database(table) -> List[Question]:
-    """Walk an 8-column table where each row is one question."""
+    """Walk an 8-column table where each row is one question.
+
+    Layout (1-indexed columns):
+        1: SL/blank   2: Question   3-6: Options A-D
+        7: Answer letter (preferred — empty in many source files)
+        8: Letter; Explanation (legacy — letter prefix is the fallback)
+
+    The parser accepts either pattern: if column 7 contains A/B/C/D we use
+    it; otherwise we read the letter from the start of column 8 (the legacy
+    "A; ..." pattern your existing files use).
+    """
     questions: List[Question] = []
     for r_idx, row in enumerate(table.rows, start=1):
         cells = row.cells
@@ -371,26 +381,38 @@ def _parse_database(table) -> List[Question]:
             # Likely a spacer/header row.
             continue
         opts = [_cell_combined_text(cells[i]._tc).strip() for i in (2, 3, 4, 5)]
-        last_cell = _cell_combined_text(cells[7]._tc).strip()
-        if not last_cell:
-            raise ValueError(f"Database row {r_idx}: answer cell is empty")
+        col7 = _cell_combined_text(cells[6]._tc).strip()
+        col8 = _cell_combined_text(cells[7]._tc).strip()
 
-        # Last cell format: "A; Is-377; (...) explanation..."
-        # The leading letter is redundant with the separate answer column we
-        # store in the model — strip it via the shared helper so it doesn't
-        # contradict the shuffled answer in output.
-        letter_part, sep, _rest = last_cell.partition(";")
-        letter = letter_part.strip().upper()
-        if letter not in ("A", "B", "C", "D"):
-            raise ValueError(
-                f"Database row {r_idx}: cannot find A/B/C/D letter "
-                f"at start of answer cell (got {letter!r})"
-            )
+        # Determine the answer letter:
+        #   1) Column 7, if it's a single A/B/C/D (possibly with trailing
+        #      punctuation), use it.
+        #   2) Otherwise look at the start of column 8 ("A; ..." pattern).
+        letter = ""
+        col7_letter_match = col7.strip().rstrip(";:.)").upper()
+        if col7_letter_match in ("A", "B", "C", "D"):
+            letter = col7_letter_match
+            explanation = _strip_answer_letter_prefix(col8) or col8
+        else:
+            if not col8:
+                raise ValueError(
+                    f"Database row {r_idx}: no answer letter in column 7 "
+                    f"and column 8 is empty."
+                )
+            letter_part, _, _ = col8.partition(";")
+            letter = letter_part.strip().upper()
+            if letter not in ("A", "B", "C", "D"):
+                raise ValueError(
+                    f"Database row {r_idx}: cannot find A/B/C/D letter "
+                    f"in column 7 ({col7!r}) or at start of column 8 "
+                    f"({letter_part!r})"
+                )
+            explanation = _strip_answer_letter_prefix(col8)
+
         try:
             ans_idx = letter_to_idx(letter)
         except ValueError as e:
             raise ValueError(f"Database row {r_idx}: {e}") from None
-        explanation = _strip_answer_letter_prefix(last_cell)
 
         if any(o == "" for o in opts):
             raise ValueError(f"Database row {r_idx}: one of the options is empty")

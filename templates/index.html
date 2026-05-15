@@ -27,6 +27,7 @@
       <p class="hint">
         Supported formats: <strong>.csv</strong>, <strong>.xlsx</strong>, <strong>.docx</strong>.
         Word documents in either Normal or Database layout are detected automatically.
+        Not sure about the format? Grab a sample below.
       </p>
       <form id="upload-form">
         <label class="field">
@@ -79,12 +80,28 @@
           <label class="radio">
             <input type="radio" name="format" value="docx_normal" checked />
             <span>Word — Normal layout
-              <span class="muted">(question table with 2×2 option grid + answer sheet)</span></span>
+              <span class="muted">(2-column page, 2×2 option grid, answer sheet on new page)</span></span>
           </label>
           <label class="radio">
             <input type="radio" name="format" value="docx_database" />
             <span>Word — Database layout
-              <span class="muted">(single 8-column table)</span></span>
+              <span class="muted">(8-column table with answer column populated)</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="format" value="pdf_normal" />
+            <span>PDF — Normal layout
+              {% if not libreoffice_available %}
+                <span class="muted">(requires LibreOffice on server — not installed)</span>
+              {% endif %}
+            </span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="format" value="pdf_database" />
+            <span>PDF — Database layout
+              {% if not libreoffice_available %}
+                <span class="muted">(requires LibreOffice on server — not installed)</span>
+              {% endif %}
+            </span>
           </label>
           <label class="radio">
             <input type="radio" name="format" value="xlsx" />
@@ -96,8 +113,32 @@
           </label>
         </fieldset>
 
+        <fieldset class="field" id="header-fieldset">
+          <legend>Question paper header
+            <span class="muted">(applies to Word / PDF output only)</span></legend>
+          <label class="radio">
+            <input type="radio" name="header_mode" value="none" />
+            <span>No header</span>
+          </label>
+          {% if has_default_header %}
+          <label class="radio">
+            <input type="radio" name="header_mode" value="default" checked />
+            <span>Use the default banner
+              <span class="muted">(<code>static/assets/default_header.jpg</code>; replace that file to change it project-wide)</span></span>
+          </label>
+          {% endif %}
+          <label class="radio">
+            <input type="radio" name="header_mode" value="custom" />
+            <span>Upload a custom banner image</span>
+          </label>
+          <label class="field" id="custom-header-field" hidden style="margin-left:24px">
+            <input type="file" id="header-image-file" accept="image/*" />
+            <span class="muted">PNG or JPEG; will be scaled to fit the page width.</span>
+          </label>
+        </fieldset>
+
         <fieldset class="field" id="math-docx-fieldset">
-          <legend>Math rendering in Word output</legend>
+          <legend>Math rendering in Word / PDF output</legend>
           <label class="radio">
             <input type="radio" name="math_in_docx" value="equation" checked />
             <span>Render KaTeX as real Word equations
@@ -134,6 +175,16 @@
       </form>
       <div id="generate-error" class="error" hidden></div>
       <div id="generate-status" class="status" hidden></div>
+    </section>
+
+    <!-- ============ SAMPLES ============ -->
+    <section class="card" id="step-samples">
+      <h2>Sample / template files</h2>
+      <p class="hint">
+        Download one to see the exact format the parser expects, then replace the
+        rows with your own questions. Math written as <code>$…$</code> is preserved.
+      </p>
+      <div id="samples-list" class="saved-list"><em class="muted">Loading…</em></div>
     </section>
 
     <!-- ============ SAVED PAPERS ============ -->

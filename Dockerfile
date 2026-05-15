@@ -1,14 +1,17 @@
 # MCQ Shuffler — production container
-# Bundles Python + pandoc so KaTeX↔OMML math conversion works in production.
+# Bundles Python + pandoc + LibreOffice so all output formats work in production.
 
 FROM python:3.12-slim
 
 # System deps:
 #   pandoc — for KaTeX ↔ Word equation conversion
-#   libxml2 / libxslt — runtime for lxml (the wheel is usually self-contained,
-#     but slim images sometimes need these for older lxml builds)
+#   libreoffice-writer — for PDF output (renders docx → pdf)
+#   fonts-noto-* — Unicode coverage for Bengali, math symbols, etc.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends pandoc \
+ && apt-get install -y --no-install-recommends \
+        pandoc \
+        libreoffice-writer libreoffice-core \
+        fonts-noto-core fonts-noto-cjk fonts-noto-extra \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,7 +27,6 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-# gunicorn binds to $PORT. 2 workers × 2 threads is plenty for a single-user
-# tool; bump these if you have lots of concurrent users.
-CMD gunicorn --workers 2 --threads 2 --timeout 120 \
+# PDF generation can take 10-30s per set, so give gunicorn a generous timeout.
+CMD gunicorn --workers 2 --threads 2 --timeout 180 \
     --bind 0.0.0.0:${PORT} "app.server:create_app()"

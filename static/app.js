@@ -93,28 +93,38 @@ $("#generate-form").addEventListener("submit", async (ev) => {
   }
 
   const fmt = document.querySelector('input[name="format"]:checked').value;
-  const payload = {
-    paper_id: state.paper_id,
-    n_sets,
-    shuffle_questions: $("#shuffle-questions").checked,
-    shuffle_options:   $("#shuffle-options").checked,
-    format: fmt,
-    persist: state.persisted,
-    math_in_docx: document.querySelector('input[name="math_in_docx"]:checked').value,
-    math_in_data: document.querySelector('input[name="math_in_data"]:checked').value,
-  };
+  const headerMode = (document.querySelector('input[name="header_mode"]:checked') || {}).value || "none";
+
+  // Multipart body so the header image can ride along.
+  const fd = new FormData();
+  fd.append("paper_id", state.paper_id);
+  fd.append("n_sets", String(n_sets));
+  fd.append("shuffle_questions", $("#shuffle-questions").checked ? "true" : "false");
+  fd.append("shuffle_options",   $("#shuffle-options").checked   ? "true" : "false");
+  fd.append("format", fmt);
+  fd.append("persist", state.persisted ? "true" : "false");
+  fd.append("math_in_docx", document.querySelector('input[name="math_in_docx"]:checked').value);
+  fd.append("math_in_data", document.querySelector('input[name="math_in_data"]:checked').value);
+  fd.append("header_mode", headerMode);
+  if (headerMode === "custom") {
+    const f = $("#header-image-file").files[0];
+    if (!f) {
+      setError("#generate-error", "Custom header chosen but no image file selected.");
+      return;
+    }
+    fd.append("header_image", f);
+  }
 
   const btn = $("#generate-btn");
   btn.disabled = true;
   btn.textContent = "Building ZIP…";
-  setStatus("#generate-status", "Generating sets, this may take a few seconds for math-heavy papers…");
+  setStatus("#generate-status",
+            fmt.startsWith("pdf_")
+              ? "PDF generation runs LibreOffice; this can take 10–30 seconds per set…"
+              : "Generating sets, this may take a few seconds for math-heavy papers…");
 
   try {
-    const r = await fetch("/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const r = await fetch("/generate", { method: "POST", body: fd });
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
       try { const j = await r.json(); msg = j.error || msg; } catch {}
@@ -136,20 +146,59 @@ $("#generate-form").addEventListener("submit", async (ev) => {
   }
 });
 
-// Show only the math fieldset that applies to the chosen output format.
-function refreshMathFieldsets() {
-  const fmt = document.querySelector('input[name="format"]:checked')?.value;
-  const isDocx = fmt === "docx_normal" || fmt === "docx_database";
+// Show/hide controls based on selections
+function refreshConditionalControls() {
+  const fmt = (document.querySelector('input[name="format"]:checked') || {}).value;
+  const isDocxOrPdf = fmt && (fmt.startsWith("docx_") || fmt.startsWith("pdf_"));
   const docxFs = $("#math-docx-fieldset");
   const dataFs = $("#math-data-fieldset");
-  if (docxFs) docxFs.hidden = !isDocx;
-  if (dataFs) dataFs.hidden = isDocx;
+  const hdrFs = $("#header-fieldset");
+  if (docxFs) docxFs.hidden = !isDocxOrPdf;
+  if (dataFs) dataFs.hidden = isDocxOrPdf;
+  if (hdrFs)  hdrFs.hidden  = !isDocxOrPdf;
+
+  const headerMode = (document.querySelector('input[name="header_mode"]:checked') || {}).value;
+  const customField = $("#custom-header-field");
+  if (customField) customField.hidden = headerMode !== "custom";
 }
 document.addEventListener("change", (e) => {
-  if (e.target && e.target.name === "format") refreshMathFieldsets();
+  if (e.target && (e.target.name === "format" || e.target.name === "header_mode")) {
+    refreshConditionalControls();
+  }
 });
-// Initial state once the page is interactive
-refreshMathFieldsets();
+refreshConditionalControls();
+
+// --- Sample files -----------------------------------------------------------
+
+async function refreshSamples() {
+  const el = $("#samples-list");
+  try {
+    const r = await fetch("/samples");
+    const data = await r.json();
+    const list = data.samples || [];
+    if (list.length === 0) {
+      el.innerHTML = `<em class="muted">No sample files available.</em>`;
+      return;
+    }
+    el.innerHTML = "";
+    for (const s of list) {
+      const div = document.createElement("div");
+      div.className = "saved-row";
+      div.innerHTML = `
+        <div>
+          <div><strong>${escapeHtml(s.filename)}</strong></div>
+          <div class="meta">${escapeHtml(s.description)}</div>
+        </div>
+        <div>
+          <a class="use" href="/samples/${encodeURIComponent(s.filename)}" download>Download</a>
+        </div>`;
+      el.appendChild(div);
+    }
+  } catch (e) {
+    el.innerHTML = `<em class="muted">Could not load samples: ${escapeHtml(e.message || e)}</em>`;
+  }
+}
+refreshSamples();
 
 $("#reset-btn").addEventListener("click", () => {
   state.paper_id = null;

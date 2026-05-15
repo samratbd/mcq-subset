@@ -2,24 +2,26 @@
 
 Two output layouts:
 
-**normal**: 2 tables.
+**normal**: optional banner image + 2 tables.
   1. Question table: 2 cols × N rows.
        Col 0 = SL ("01."), narrow (~300 DXA).
        Col 1 = nested 4-column table identical to the source structure:
            Row 0  (gridSpan=4):  the question text, bold
            Row 1  (4 cells):     [A.] [option A] [B.] [option B]
            Row 2  (4 cells):     [C.] [option C] [D.] [option D]
-       Marker cells are very narrow (~250 DXA) so "A." sits right next to
+       Marker cells are very narrow (~260 DXA) so "A." sits right next to
        the option text — no horizontal gap.
-  2. Answer sheet: 3 cols × (N+1) rows in a single-column section.
+  2. Answer sheet — starts on a new page (via a NEW_PAGE section break).
 
-**database**: single 8-column table.
+**database**: optional banner image + single 8-column table:
+       [SL] [Question] [optA] [optB] [optC] [optD] [Answer] [Explanation]
+  (Source files leave column 7 blank; we emit the answer letter there.)
 
 Every paragraph this writer emits has explicit zero spacing
 (`spaceBefore=0`, `spaceAfter=0`, `line=240`/single) and zero indentation.
-That's what makes the questions stack tightly the way the source does —
-without it, Word's default paragraph style adds ~8pt after each paragraph
-and ~1.08 line height, which is what was producing the big vertical gaps.
+
+Optional `header_image` (bytes) is inserted at the very top of the body,
+centred and sized to the page width. Pass `None` to skip.
 
 Math handling (per `math_mode`):
   - "equation": $...$ KaTeX → real Word equations via OMML.
@@ -29,14 +31,15 @@ Math handling (per `math_mode`):
 
 from __future__ import annotations
 import io
-from typing import List
+from typing import List, Optional
 
 from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, Cm
+from docx.shared import Pt, Cm, Emu, Inches
 from docx.text.paragraph import Paragraph
 from lxml import etree
 
@@ -226,11 +229,32 @@ def _set_section_columns(section, num_cols: int, space_dxa: int = 360):
     sectPr.append(cols)
 
 
-def _start_new_section(doc: Document, *, num_cols: int) -> None:
-    new = doc.add_section(WD_SECTION.CONTINUOUS)
+def _start_new_section(doc: Document, *, num_cols: int,
+                       new_page: bool = False) -> None:
+    section_type = WD_SECTION.NEW_PAGE if new_page else WD_SECTION.CONTINUOUS
+    new = doc.add_section(section_type)
     new.left_margin = Cm(1.5)
     new.right_margin = Cm(1.5)
     _set_section_columns(new, num_cols)
+
+
+def _add_header_image(doc: Document, image_bytes: bytes) -> None:
+    """Insert a centred image at the very top of the body.
+
+    Sized to the page's usable width (about 18 cm at 1.5 cm margins on A4).
+    Used for the question paper banner — appears once at the top of page 1.
+    """
+    p = doc.add_paragraph()
+    _zero_paragraph_spacing(p._p)
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run()
+    # Fit width: A4 = 21 cm, minus 1.5 cm × 2 margins = 18 cm usable.
+    run.add_picture(io.BytesIO(image_bytes), width=Cm(18))
+
+
+def _set_section_columns_only(section, num_cols: int, space_dxa: int = 360):
+    """Public alias kept for clarity in the layout functions."""
+    _set_section_columns(section, num_cols, space_dxa)
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +316,24 @@ def _nested_options_table_xml() -> str:
 def write_docx_normal(questions: List[Question],
                       *,
                       title: str = "",
-                      math_mode: str = "equation") -> bytes:
+                      math_mode: str = "equation",
+                      header_image: Optional[bytes] = None) -> bytes:
     doc = _new_document(title)
 
-    # Two-column page layout — questions flow left → right
-    _set_section_columns(doc.sections[0], num_cols=2, space_dxa=300)
+    # Header banner (page 1 only — it's body content, not a Word "header")
+    if header_image:
+        # Insert into the FIRST section, which is single-column by default.
+        # The 2-column layout for questions is applied via a continuous section
+        # break right after, so the header spans the full page width.
+        try:
+            _add_header_image(doc, header_image)
+            _start_new_section(doc, num_cols=2, new_page=False)
+        except Exception:
+            # Bad image bytes shouldn't kill the whole generation.
+            pass
+    else:
+        # No header → just put the whole questions block in 2-column mode
+        _set_section_columns(doc.sections[0], num_cols=2, space_dxa=300)
 
     body = doc.element.body
 
@@ -322,36 +359,41 @@ def write_docx_normal(questions: List[Question],
             math_mode=math_mode,
         )
 
-        # Row 1 — A / B
+        # Row 1 — A / B (markers bold, option text NOT bold)
         tcs = ntrs[1].findall(qn("w:tc"))
         _fill_paragraph_xml(tcs[0].find(qn("w:p")), "A.", bold=True,
                             size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[1].find(qn("w:p")), q.options[0],
-                            size_pt=10, math_mode=math_mode)
+                            bold=False, size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[2].find(qn("w:p")), "B.", bold=True,
                             size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[3].find(qn("w:p")), q.options[1],
-                            size_pt=10, math_mode=math_mode)
+                            bold=False, size_pt=10, math_mode=math_mode)
 
         # Row 2 — C / D
         tcs = ntrs[2].findall(qn("w:tc"))
         _fill_paragraph_xml(tcs[0].find(qn("w:p")), "C.", bold=True,
                             size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[1].find(qn("w:p")), q.options[2],
-                            size_pt=10, math_mode=math_mode)
+                            bold=False, size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[2].find(qn("w:p")), "D.", bold=True,
                             size_pt=10, math_mode=math_mode)
         _fill_paragraph_xml(tcs[3].find(qn("w:p")), q.options[3],
-                            size_pt=10, math_mode=math_mode)
+                            bold=False, size_pt=10, math_mode=math_mode)
 
-    # Switch to a single-column section for the answer sheet.
-    _start_new_section(doc, num_cols=1)
+    # Answer sheet — starts on a NEW PAGE, single-column, full width.
+    _start_new_section(doc, num_cols=1, new_page=True)
 
     head = doc.add_paragraph()
     _zero_paragraph_spacing(head._p)
+    head.alignment = WD_ALIGN_PARAGRAPH.CENTER
     hr = head.add_run("Answer Sheet")
     hr.bold = True
-    hr.font.size = Pt(12)
+    hr.font.size = Pt(14)
+
+    # Blank line for breathing room
+    spacer = doc.add_paragraph()
+    _zero_paragraph_spacing(spacer._p)
 
     atbl = doc.add_table(rows=1, cols=3)
     atbl.autofit = False
@@ -378,7 +420,7 @@ def write_docx_normal(questions: List[Question],
         ar.font.size = Pt(10)
 
         _add_rich(c[2].paragraphs[0], q.explanation,
-                  size_pt=10, math_mode=math_mode)
+                  bold=False, size_pt=10, math_mode=math_mode)
         for cell in c:
             _set_cell_borders(cell)
 
@@ -394,8 +436,22 @@ def write_docx_normal(questions: List[Question],
 def write_docx_database(questions: List[Question],
                         *,
                         title: str | None = None,
-                        math_mode: str = "equation") -> bytes:
+                        math_mode: str = "equation",
+                        header_image: Optional[bytes] = None) -> bytes:
+    """Single 8-column table — one row per question.
+
+    Column layout:
+        0: SL      1: Question     2-5: Options A-D
+        6: Answer letter (A/B/C/D)  ← was blank in your source; now populated
+        7: Explanation (without redundant leading letter)
+    """
     doc = _new_document(title)
+
+    if header_image:
+        try:
+            _add_header_image(doc, header_image)
+        except Exception:
+            pass
 
     tbl = doc.add_table(rows=0, cols=8)
     tbl.autofit = True
@@ -403,26 +459,36 @@ def write_docx_database(questions: List[Question],
     for q in questions:
         row = tbl.add_row()
         c = row.cells
+
         # SL
         p = c[0].paragraphs[0]
         _zero_paragraph_spacing(p._p)
         r = p.add_run(f"{q.sl:02d}")
         r.bold = True
         r.font.size = Pt(10)
-        # Question
+
+        # Question — bold
         _add_rich(c[1].paragraphs[0], q.question,
                   bold=True, size_pt=10, math_mode=math_mode)
-        # Options
+
+        # Options A-D — not bold
         for i in range(4):
             _add_rich(c[2 + i].paragraphs[0], q.options[i],
-                      size_pt=10, math_mode=math_mode)
-        # Explanation prefixed with the answer letter
-        last = c[7].paragraphs[0]
-        _zero_paragraph_spacing(last._p)
-        prefix = last.add_run(f"{q.answer_letter}; ")
-        prefix.bold = True
-        prefix.font.size = Pt(10)
-        _add_rich(last, q.explanation, size_pt=10, math_mode=math_mode)
+                      bold=False, size_pt=10, math_mode=math_mode)
+
+        # Column 7 (index 6): the answer letter — was blank in source files,
+        # now contains the correct answer so the table is self-explanatory.
+        ap = c[6].paragraphs[0]
+        _zero_paragraph_spacing(ap._p)
+        ar = ap.add_run(q.answer_letter)
+        ar.bold = True
+        ar.font.size = Pt(10)
+
+        # Column 8 (index 7): explanation only — no letter prefix any more
+        # (the dedicated answer column above has it).
+        _add_rich(c[7].paragraphs[0], q.explanation,
+                  bold=False, size_pt=10, math_mode=math_mode)
+
         for cell in c:
             _set_cell_borders(cell)
 
