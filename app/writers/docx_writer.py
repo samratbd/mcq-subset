@@ -204,19 +204,40 @@ def _set_cell_borders(cell, *, color: str = "cccccc"):
 
 
 def _new_document(title: str | None = None) -> Document:
+    """Create a blank document with sensible page margins.
+
+    The `title` argument is accepted for backward compatibility but no
+    longer rendered here — use `_add_paper_title` after the header image
+    so the title appears centered just below the banner.
+    """
     doc = Document()
     s = doc.sections[0]
     s.left_margin = Cm(1.5)
     s.right_margin = Cm(1.5)
     s.top_margin = Cm(1.5)
     s.bottom_margin = Cm(1.5)
-    if title:
-        h = doc.add_paragraph()
-        _zero_paragraph_spacing(h._p)
-        r = h.add_run(title)
-        r.bold = True
-        r.font.size = Pt(13)
     return doc
+
+
+def _add_paper_title(doc: Document, title: str) -> None:
+    """Insert the paper title (display name + 'Set N') centered & bold.
+
+    Goes immediately after the header banner (or at the very top if there
+    is no banner). The title sits at the centre-bottom of the header area
+    so students see the paper name and their set number together at the
+    top of page 1, before the questions begin.
+    """
+    if not title:
+        return
+    h = doc.add_paragraph()
+    _zero_paragraph_spacing(h._p)
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # A small space before so the title doesn't collide with the banner
+    h.paragraph_format.space_before = Pt(2)
+    h.paragraph_format.space_after = Pt(4)
+    r = h.add_run(title)
+    r.bold = True
+    r.font.size = Pt(13)
 
 
 def _set_section_columns(section, num_cols: int, space_dxa: int = 360):
@@ -265,9 +286,10 @@ def _nested_options_table_xml() -> str:
     """The inner 4-column table that holds the question (row 0, gridSpan=4)
     and the options (rows 1 & 2, with narrow marker cells).
 
-    Widths mirror the source: marker columns are 250 DXA, option columns
-    take the rest. This is what makes "A. text" sit close together — no
-    horizontal gap caused by a too-wide marker cell.
+    Each row has <w:cantSplit/> so it never splits across a column/page
+    boundary, and the question + first option row carry <w:keepNext/> in
+    their paragraph properties — together these guarantee the whole
+    question (label + 4 options) stays in a single column.
     """
     return f'''
 <w:tbl {_W_NS_DECL}>
@@ -293,22 +315,25 @@ def _nested_options_table_xml() -> str:
     <w:gridCol w:w="1940"/>
   </w:tblGrid>
   <w:tr>
+    <w:trPr><w:cantSplit/></w:trPr>
     <w:tc>
       <w:tcPr><w:tcW w:w="4400" w:type="dxa"/><w:gridSpan w:val="4"/></w:tcPr>
-      <w:p/>
+      <w:p><w:pPr><w:keepNext/><w:keepLines/></w:pPr></w:p>
     </w:tc>
   </w:tr>
   <w:tr>
-    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p/></w:tc>
+    <w:trPr><w:cantSplit/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepNext/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepNext/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepNext/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepNext/></w:pPr></w:p></w:tc>
   </w:tr>
   <w:tr>
-    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p/></w:tc>
-    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p/></w:tc>
+    <w:trPr><w:cantSplit/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepLines/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepLines/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="260"  w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepLines/></w:pPr></w:p></w:tc>
+    <w:tc><w:tcPr><w:tcW w:w="1940" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:keepLines/></w:pPr></w:p></w:tc>
   </w:tr>
 </w:tbl>'''.strip()
 
@@ -327,13 +352,17 @@ def write_docx_normal(questions: List[Question],
         # break right after, so the header spans the full page width.
         try:
             _add_header_image(doc, header_image)
+            # Title goes inside/just below the banner, centred + bold.
+            _add_paper_title(doc, title)
             _start_new_section(doc, num_cols=2, new_page=False)
         except Exception:
             # Bad image bytes shouldn't kill the whole generation.
-            pass
+            _add_paper_title(doc, title)
+            _set_section_columns(doc.sections[0], num_cols=2, space_dxa=300)
     else:
-        # No header → just put the whole questions block in 2-column mode
-        _set_section_columns(doc.sections[0], num_cols=2, space_dxa=300)
+        # No header → put title at the very top, then switch to 2-column
+        _add_paper_title(doc, title)
+        _start_new_section(doc, num_cols=2, new_page=False)
 
     body = doc.element.body
 
@@ -452,6 +481,10 @@ def write_docx_database(questions: List[Question],
             _add_header_image(doc, header_image)
         except Exception:
             pass
+
+    # Centered, bold paper title — goes below the banner if there is one,
+    # else at the top of the page.
+    _add_paper_title(doc, title or "")
 
     tbl = doc.add_table(rows=0, cols=8)
     tbl.autofit = True

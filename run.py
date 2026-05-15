@@ -45,6 +45,7 @@ def check_dependencies() -> None:
         import flask  # noqa
         import openpyxl  # noqa
         import docx  # noqa
+        import PIL  # noqa
     except ImportError as e:
         problems.append(
             f"  - Missing Python package: {e}.\n"

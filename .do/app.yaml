@@ -1,0 +1,40 @@
+# DigitalOcean App Platform spec
+# Uses the bundled Dockerfile, which already installs every system dep
+# (libgl1, libglib2.0-0, pandoc, libreoffice, fonts) — so no extra
+# run_command or Aptfile is needed.
+
+name: mcq-subset
+region: blr
+
+services:
+  - name: mcq-subset
+    # Build & run from the Dockerfile in the repo root.
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 8080
+    instance_count: 1
+    # apps-s-1vcpu-0.5gb is too small for OpenCV + LibreOffice + Python.
+    # The build alone uses ~1 GB; runtime peaks around 600 MB during PDF
+    # generation. Use at least apps-s-1vcpu-1gb.
+    instance_size_slug: apps-s-1vcpu-1gb
+
+    github:
+      repo: samratbd/mcq-subset
+      branch: main
+      deploy_on_push: true
+
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /
+      component:
+        name: mcq-subset
+
+domains:
+  - domain: mcq.onurio.com
+    type: PRIMARY
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
