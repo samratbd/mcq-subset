@@ -328,4 +328,141 @@ def create_app() -> Flask:
             download_name=filename,
         )
 
+    # --- OMR scanner ---------------------------------------------------------
+
+    @app.post("/omr/scan")
+    def omr_scan():
+        """Scan one or more uploaded OMR sheet images.
+
+        Multipart form fields:
+            sheet_type   : 'auto' (default), 'omr_50', 'omr_100'
+            output_format: 'xlsx' (default), 'csv', 'json'
+            include_review_images: 'true' to include per-sheet annotated PNGs
+            files        : one or more image files (BMP/PNG/JPEG)
+
+        Returns a ZIP containing the results file + (optionally) review images.
+        """
+        from .omr import (
+            scan_omr, render_review_image,
+            write_csv as omr_write_csv,
+            write_xlsx as omr_write_xlsx,
+            write_json as omr_write_json,
+            TEMPLATES as OMR_TEMPLATES,
+        )
+
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify(error="No image files uploaded."), 400
+
+        sheet_type = (request.form.get("sheet_type") or "auto").lower()
+        output_format = (request.form.get("output_format") or "xlsx").lower()
+        include_review = (
+            request.form.get("include_review_images", "false").lower()
+            in ("true", "1", "yes", "on")
+        )
+
+        if sheet_type not in ("auto", "omr_50", "omr_100"):
+            return jsonify(
+                error=f"bad sheet_type: {sheet_type!r} "
+                      "(must be 'auto', 'omr_50', or 'omr_100')"
+            ), 400
+        if output_format not in ("csv", "xlsx", "json"):
+            return jsonify(
+                error=f"bad output_format: {output_format!r}"
+            ), 400
+
+        # Scan all sheets. We process them in upload order; the result
+        # objects retain that order so the user can match outputs back.
+        results: list = []
+        per_sheet_review_imgs: list = []
+        for f in files:
+            try:
+                data = f.read()
+            except Exception as e:
+                app.logger.error("read failed for %s: %s", f.filename, e)
+                continue
+            res = scan_omr(data, sheet_type=sheet_type)
+            results.append((res, f.filename or "unknown"))
+            if include_review and not res.error:
+                img_bytes = render_review_image(data, res)
+                per_sheet_review_imgs.append(
+                    ((f.filename or "sheet") + "_review.png", img_bytes)
+                )
+
+        if not results:
+            return jsonify(error="No sheets could be read."), 400
+
+        # All output rows have the same width — pick the max question count
+        # across all sheets so partial-failures don't blow out the schema.
+        n_questions = max(
+            OMR_TEMPLATES[r.sheet_type].n_questions for r, _ in results
+        )
+
+        # Build the requested output
+        if output_format == "csv":
+            data_bytes = omr_write_csv(results, n_questions)
+            data_name = "omr_results.csv"
+        elif output_format == "json":
+            data_bytes = omr_write_json(results, n_questions)
+            data_name = "omr_results.json"
+        else:
+            data_bytes = omr_write_xlsx(results, n_questions)
+            data_name = "omr_results.xlsx"
+
+        # Always zip — easy to package + optional review images alongside.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(data_name, data_bytes)
+
+            # Summary of what was scanned
+            summary_lines = [
+                f"Sheets uploaded: {len(files)}",
+                f"Sheets scanned:  {len(results)}",
+                f"Sheets needing review: "
+                f"{sum(1 for r, _ in results if r.needs_review)}",
+                f"Average confidence: "
+                f"{(sum(r.confidence for r, _ in results) / len(results) * 100):.1f}%",
+                f"Sheet type: {sheet_type}",
+                "",
+                "Per-sheet summary:",
+            ]
+            for serial, (res, src) in enumerate(results, start=1):
+                line = (
+                    f"  {serial:3d}. {src:40.40s} "
+                    f"roll={res.roll_number}  set={res.set_letter}  "
+                    f"conf={res.confidence * 100:5.1f}%  "
+                    f"review={'YES' if res.needs_review else 'no'}"
+                )
+                if res.error:
+                    line += f"  ERROR: {res.error}"
+                summary_lines.append(line)
+            zf.writestr("SUMMARY.txt", "\n".join(summary_lines))
+
+            for fname, img_bytes in per_sheet_review_imgs:
+                if img_bytes:
+                    # Put review images in a subfolder
+                    zf.writestr(f"review/{fname}", img_bytes)
+
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name="omr_results.zip",
+        )
+
+    @app.get("/omr/health")
+    def omr_health():
+        from .omr import TEMPLATES as OMR_TEMPLATES
+        try:
+            import cv2  # noqa
+            cv_ok = True
+        except Exception:
+            cv_ok = False
+        return jsonify(
+            ok=cv_ok,
+            opencv=cv_ok,
+            sheet_types=sorted(OMR_TEMPLATES.keys()),
+        )
+
     return app

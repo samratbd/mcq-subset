@@ -4,23 +4,34 @@ Local / self-hosted web app that turns one MCQ question paper into up to 20 repr
 
 ## Features
 
+The app has two tabs:
+
+### 📝 Generate question paper sets (the original feature)
+
 - **Inputs**: Word (`.docx`), Excel (`.xlsx`), CSV (`.csv`).
   - Word: auto-detects *Normal* (2-col + answer sheet) or *Database* (8-col) layout.
   - CSV/XLSX: standard 8-column schema (see below).
 - **Outputs**: Word (`Normal` / `Database`), PDF (`Normal` / `Database`), Excel, CSV.
-  - PDF is rendered from the corresponding Word file via LibreOffice for perfect fidelity.
-- **Math handling, both directions**:
-  - KaTeX in CSV/Excel → real Word equations on output (via pandoc).
-  - OMML equations in source Word → KaTeX `$...$` strings on Excel/CSV output.
-  - Best-effort Unicode rendering (`x^2` → `x²`) as a middle ground.
-- **Faithful Word layout**: 2-column page section, 2×2 option grid per question, compact paragraph spacing matching typical printed question papers. Answer sheet starts on a new page.
-- **Question paper header (banner)**: include a default banner image (shipped in `static/assets/default_header.jpg` — replace the file to brand the app), upload a custom one per generation, or skip.
-- **Seeded shuffle**: Set N is reproducible — same source + set number = same output, every time.
-- **Two shuffle modes**: question order, and/or option order (with answer letter remapped so the correct option still wins).
-- **Up to 20 sets per run**, downloaded as a ZIP with a `MANIFEST.txt` and per-set integrity report.
-- **Integrity checks** before every download: question multiset preserved, correct option text preserved at the new answer position, SLs are 1..N. Failures abort rather than ship a wrong paper.
-- **Sample / template files** downloadable from the UI for every supported input format.
-- **Optional SQLite persistence**: keep papers and regenerate sets later, or run one-shot.
+- **Math both directions**: KaTeX ↔ real Word equations via pandoc.
+- **Faithful Word layout**: 2-column page, 2×2 option grid per question, answer sheet on a new page.
+- **Question paper header (banner)**: include a default banner, upload custom, or none.
+- **Seeded shuffle**: Set N is reproducible — same source + set number = same output.
+- **Two shuffle modes**: question order, and/or option order (with answer letter remapped).
+- **Up to 20 sets per run**, downloaded as a ZIP with manifest + integrity report.
+- **Sample / template files** downloadable from the UI for every input format.
+- **Optional SQLite persistence**.
+
+### 📋 Scan OMR answer sheets (new)
+
+- **Auto-detects** 50-question (portrait) and 100-question (landscape) sheets.
+- **Fiducial-based correction**: uses the four corner markers on each sheet to remove tilt and minor perspective distortion before reading bubbles.
+- **Per-sheet output row**: serial, roll number, set letter, all answer letters, confidence, `needs_review` flag, list of flagged questions.
+- **Handles edge cases**:
+  - Blank → empty cell.
+  - Multiple-fill → "A,C".
+  - Faint / ambiguous marks → flagged for human review (the ~1% that real-world OMR can't decide automatically).
+- **Annotated review images** (optional): for each sheet, a PNG showing every detected bubble in green (empty) / red (filled) / orange (review).
+- **Outputs**: Excel (with colour-coded review highlighting), CSV, or JSON.
 
 ## Setup
 

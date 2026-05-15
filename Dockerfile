@@ -7,11 +7,13 @@ FROM python:3.12-slim
 #   pandoc — for KaTeX ↔ Word equation conversion
 #   libreoffice-writer — for PDF output (renders docx → pdf)
 #   fonts-noto-* — Unicode coverage for Bengali, math symbols, etc.
+#   libgl1 / libglib2 — runtime for opencv-python-headless (image decoding)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         pandoc \
         libreoffice-writer libreoffice-core \
         fonts-noto-core fonts-noto-cjk fonts-noto-extra \
+        libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

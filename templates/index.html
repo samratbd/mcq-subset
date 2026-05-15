@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>MCQ&nbsp;Shuffler</h1>
-    <p class="tagline">Generate up to 20 shuffled sets from a single question paper.</p>
+    <p class="tagline">Generate up to 20 shuffled sets from a single question paper, or scan filled OMR answer sheets.</p>
     {% if not pandoc_available %}
       <div class="warn">
         <strong>Note:</strong> pandoc is not installed. KaTeX in your inputs will
@@ -18,7 +18,16 @@
         for proper Word math.
       </div>
     {% endif %}
+
+    <nav class="tabs" role="tablist">
+      <button class="tab-btn active" data-tab="generate" role="tab"
+              aria-selected="true">📝 Generate question paper sets</button>
+      <button class="tab-btn" data-tab="omr" role="tab"
+              aria-selected="false">📋 Scan OMR answer sheets</button>
+    </nav>
   </header>
+
+  <div class="tab-panel" id="tab-generate">
 
   <main>
     <!-- ============ STEP 1: UPLOAD ============ -->
@@ -194,6 +203,88 @@
       <div id="saved-list" class="saved-list"><em class="muted">Loading…</em></div>
     </section>
   </main>
+  </div> <!-- /#tab-generate -->
+
+  <div class="tab-panel" id="tab-omr" hidden>
+    <main>
+      <section class="card">
+        <h2>1. Upload filled OMR answer sheets</h2>
+        <p class="hint">
+          Accepts <strong>.bmp</strong>, <strong>.png</strong>, or <strong>.jpg</strong>.
+          Drop in one sheet or many — they're processed in batch. Each row of the output
+          spreadsheet is one student's sheet.
+        </p>
+        <form id="omr-form">
+          <label class="field">
+            <span>OMR sheet images</span>
+            <input type="file" id="omr-files" accept=".bmp,.png,.jpg,.jpeg"
+                   multiple required />
+            <span class="muted" id="omr-files-count"></span>
+          </label>
+
+          <fieldset class="field">
+            <legend>Sheet type</legend>
+            <label class="radio">
+              <input type="radio" name="omr_sheet_type" value="auto" checked />
+              <span>Auto-detect
+                <span class="muted">(portrait = 50 questions, landscape = 100)</span></span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="omr_sheet_type" value="omr_50" />
+              <span>50-question sheet (portrait)</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="omr_sheet_type" value="omr_100" />
+              <span>100-question sheet (landscape)</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="field">
+            <legend>Output format</legend>
+            <label class="radio">
+              <input type="radio" name="omr_output" value="xlsx" checked />
+              <span>Excel (.xlsx)
+                <span class="muted">— ambiguous cells highlighted in colour</span></span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="omr_output" value="csv" />
+              <span>CSV</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="omr_output" value="json" />
+              <span>JSON
+                <span class="muted">— includes raw fill fractions for debugging</span></span>
+            </label>
+          </fieldset>
+
+          <label class="field checkbox">
+            <input type="checkbox" id="omr-review-images" />
+            <span>Include annotated review images
+              <span class="muted">(adds a <code>review/</code> folder to the ZIP — useful for verifying ambiguous sheets)</span></span>
+          </label>
+
+          <button type="submit" id="omr-btn" class="primary">Scan & download</button>
+        </form>
+        <div id="omr-error" class="error" hidden></div>
+        <div id="omr-status" class="status" hidden></div>
+      </section>
+
+      <section class="card">
+        <h2>How it works</h2>
+        <p class="hint" style="line-height: 1.6">
+          The scanner uses the four black square markers in each corner of the sheet to correct
+          any tilt or scale variation in the scan, then samples the fill of each bubble against
+          a known template. Standard thresholds: under 25% fill → blank, 25–55% → flagged for
+          review, over 55% → filled. Each row carries a confidence score and a
+          <code>needs_review</code> flag so you can spot-check the ~1% that aren't obvious.
+        </p>
+        <p class="hint">
+          <strong>Output columns:</strong> serial, roll_number, set, Q1, Q2, …, Q50/Q100,
+          confidence, needs_review, review_items, source_file.
+        </p>
+      </section>
+    </main>
+  </div> <!-- /#tab-omr -->
 
   <footer>
     <p>Runs locally on your machine. No data leaves this computer.</p>

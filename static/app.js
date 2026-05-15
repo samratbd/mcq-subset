@@ -198,7 +198,85 @@ async function refreshSamples() {
     el.innerHTML = `<em class="muted">Could not load samples: ${escapeHtml(e.message || e)}</em>`;
   }
 }
-refreshSamples();
+// --- Tab navigation ---------------------------------------------------------
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const target = btn.dataset.tab;
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      const active = b.dataset.tab === target;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll(".tab-panel").forEach((p) => {
+      p.hidden = p.id !== `tab-${target}`;
+    });
+  });
+});
+
+// --- OMR scanner ------------------------------------------------------------
+
+const omrFiles = document.getElementById("omr-files");
+if (omrFiles) {
+  omrFiles.addEventListener("change", () => {
+    const n = omrFiles.files.length;
+    const lbl = document.getElementById("omr-files-count");
+    lbl.textContent = n ? `${n} file${n === 1 ? "" : "s"} selected` : "";
+  });
+}
+
+const omrForm = document.getElementById("omr-form");
+if (omrForm) {
+  omrForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const errEl = document.getElementById("omr-error");
+    const statusEl = document.getElementById("omr-status");
+    errEl.hidden = true; statusEl.hidden = true;
+
+    const files = omrFiles.files;
+    if (!files.length) {
+      errEl.textContent = "Choose at least one OMR image.";
+      errEl.hidden = false;
+      return;
+    }
+
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    fd.append("sheet_type",
+      document.querySelector('input[name="omr_sheet_type"]:checked').value);
+    fd.append("output_format",
+      document.querySelector('input[name="omr_output"]:checked').value);
+    if (document.getElementById("omr-review-images").checked) {
+      fd.append("include_review_images", "true");
+    }
+
+    const btn = document.getElementById("omr-btn");
+    btn.disabled = true;
+    btn.textContent = `Scanning ${files.length} sheet${files.length === 1 ? "" : "s"}…`;
+    statusEl.textContent = `Scanning ${files.length} sheet${files.length === 1 ? "" : "s"}… large batches can take a moment.`;
+    statusEl.hidden = false;
+
+    try {
+      const r = await fetch("/omr/scan", { method: "POST", body: fd });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { const j = await r.json(); msg = j.error || msg; } catch {}
+        errEl.textContent = msg;
+        errEl.hidden = false;
+        return;
+      }
+      const blob = await r.blob();
+      triggerDownload(blob, "omr_results.zip");
+      statusEl.textContent = `Done — ${files.length} sheet${files.length === 1 ? "" : "s"} processed, results in omr_results.zip.`;
+    } catch (e) {
+      errEl.textContent = e.message || "Scan failed.";
+      errEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Scan & download";
+    }
+  });
+}
 
 $("#reset-btn").addEventListener("click", () => {
   state.paper_id = null;
@@ -317,3 +395,4 @@ function escapeHtml(s) {
 // --- Init -------------------------------------------------------------------
 
 refreshSavedList();
+refreshSamples();
