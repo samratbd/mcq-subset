@@ -407,19 +407,17 @@ def create_app() -> Flask:
             ), 400
 
         try:
-            # Scan all sheets. Each scan is individually try/except'd so one
-            # bad file doesn't blow up the whole batch.
-            results: list = []
-            per_sheet_review_imgs: list = []
+            # Read all file bytes first (must do this in the request thread).
+            files_data: list = []
             for f in files:
                 fname = f.filename or "unknown"
                 try:
                     data = f.read()
                 except Exception as e:
                     app.logger.warning("Read failed for %s: %s", fname, e)
-                    # Record a failed-scan result so the batch summary mentions it
                     from .omr.scanner import OmrResult
-                    results.append((
+                    files_data.append((
+                        fname, None,
                         OmrResult(
                             sheet_type=("omr_50" if sheet_type == "auto"
                                         else sheet_type),
@@ -430,14 +428,24 @@ def create_app() -> Flask:
                             fill_fractions=[],
                             error=f"Could not read uploaded file: {e}",
                         ),
-                        fname,
                     ))
                     continue
-
                 if not data:
                     app.logger.warning("Empty file: %s", fname)
                     continue
+                files_data.append((fname, data, None))
 
+            # Parallel-scan all files using ThreadPoolExecutor.
+            # OpenCV releases the GIL during image processing so threads
+            # genuinely run in parallel on multi-core CPUs.
+            from concurrent.futures import ThreadPoolExecutor
+            import os
+            max_workers = min(8, max(2, (os.cpu_count() or 2)))
+
+            def _scan_one(item):
+                fname, data, pre_error = item
+                if pre_error is not None:
+                    return (pre_error, fname, None)
                 try:
                     res = scan_omr(data, sheet_type=sheet_type)
                 except Exception as e:
@@ -456,18 +464,24 @@ def create_app() -> Flask:
                         fill_fractions=[],
                         error=f"{type(e).__name__}: {e}",
                     )
-
-                results.append((res, fname))
-
+                review_png = None
                 if include_review and not res.error:
                     try:
-                        img_bytes = render_review_image(data, res)
-                        per_sheet_review_imgs.append(
-                            ((fname or "sheet") + "_review.png", img_bytes)
-                        )
+                        review_png = render_review_image(data, res)
                     except Exception as e:
                         app.logger.warning(
                             "Review image failed for %s: %s", fname, e
+                        )
+                return (res, fname, review_png)
+
+            results: list = []
+            per_sheet_review_imgs: list = []
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for res, fname, review_png in pool.map(_scan_one, files_data):
+                    results.append((res, fname))
+                    if review_png:
+                        per_sheet_review_imgs.append(
+                            ((fname or "sheet") + "_review.png", review_png)
                         )
 
             if not results:

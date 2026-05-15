@@ -36,9 +36,9 @@ class SheetTemplate:
 def _build_50q() -> SheetTemplate:
     """50-question template (portrait 1400 × 2080).
 
-    Coordinates measured against `MCQ050202605150002.bmp` using the
-    OUTER-CORNER fiducial warp (each fiducial's outermost corner maps to
-    the canonical image corner, giving zero margin).
+    Coordinates measured by Hough Circle detection on the user's blank
+    `MCQ050202605150002.bmp`. Hough finds the GEOMETRIC center of each
+    printed pink bubble ring (not biased by the letter glyph inside).
 
     Bubble radius = 18 px (actual printed bubble diameter ≈ 37 px).
     """
@@ -51,28 +51,26 @@ def _build_50q() -> SheetTemplate:
         snap_search_radius=15,
     )
 
-    # ROLL NUMBER — 6 columns × 10 digit rows.
-    # X measured at digit-0 row: 62, 148, 233, 318, 404, 489
-    # Y from 181 to ~. Stride = roll stride (matches first 10 of SET-like grid).
-    roll_xs = [62, 148, 233, 318, 404, 489]
-    # 10 Y values: from 181 to 909, evenly spaced (stride ~81)
-    roll_y_start, roll_y_end = 181, 909
+    # ROLL NUMBER — 6 columns × 10 rows. Hough X centers: 61, 147, 231, 317, 403, 487
+    roll_xs = [61, 147, 231, 317, 403, 487]
+    # Y stride matches roll = 80.4. 10 rows from Y=180 to Y=904
+    roll_y_start, roll_y_end = 180, 904
     roll_ys = [int(round(roll_y_start + i * (roll_y_end - roll_y_start) / 9))
                for i in range(10)]
     t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    # SET — 1 column at X=573, same Y values as first 6 roll rows
-    t.set_bubbles = [(573, y) for y in roll_ys[:6]]
+    # SET — 1 column at X=572, same Y as first 6 roll rows
+    t.set_bubbles = [(572, y) for y in roll_ys[:6]]
 
-    # Question rows — 25 rows from Y=99 to Y=2018, stride ~80.0
+    # Question rows — 25 rows from Y=99 to Y=2018, stride ~80
     q_y_start, q_y_end = 99, 2018
     q_ys = [int(round(q_y_start + i * (q_y_end - q_y_start) / 24))
             for i in range(25)]
 
-    # Q1-25 X: 710, 793, 873, 957  (stride ~82)
-    q1_25_xs = [710, 793, 873, 957]
-    # Q26-50 X: 1083, 1165, 1248, 1330
-    q26_50_xs = [1083, 1165, 1248, 1330]
+    # Q1-25 X (Hough centers): 700, 785, 870, 956
+    q1_25_xs = [700, 785, 870, 956]
+    # Q26-50 X: 1083, 1167, 1251, 1337
+    q26_50_xs = [1083, 1167, 1251, 1337]
 
     answer_bubbles = []
     for y in q_ys:
@@ -87,8 +85,8 @@ def _build_50q() -> SheetTemplate:
 def _build_100q() -> SheetTemplate:
     """100-question template (landscape 2500 × 1700).
 
-    Coordinates measured against `MCQ100202605150002.bmp` using the
-    OUTER-CORNER fiducial warp. Bubble radius = 18 px.
+    Coordinates measured by Hough Circle detection on the user's blank
+    `MCQ100202605150002.bmp`. Bubble radius = 18 px.
     """
     t = SheetTemplate(
         name="omr_100",
@@ -99,35 +97,31 @@ def _build_100q() -> SheetTemplate:
         snap_search_radius=15,
     )
 
-    # ROLL NUMBER — 6 columns × 10 rows.
-    # Measured at digit-0 row (Y≈179): X = 81, 158, 236, 306, 384, 458
-    # NOTE: col2-col3 stride (70) is smaller than others (~78); this matches
-    # the actual printed layout (slight non-uniform spacing).
-    roll_xs = [81, 158, 236, 306, 384, 458]
-    # Y from 179 to 877, stride ~77.5
-    roll_y_start, roll_y_end = 179, 877
+    # ROLL — 6 columns × 10 rows. Hough X centers: 90, 164, 237, 310, 384, 458
+    roll_xs = [90, 164, 237, 310, 384, 458]
+    roll_y_start, roll_y_end = 175, 873
     roll_ys = [int(round(roll_y_start + i * (roll_y_end - roll_y_start) / 9))
                for i in range(10)]
     t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    # SET — 1 column at X=568, Y from 177 to 564
-    set_y_start, set_y_end = 177, 564
-    set_ys = [int(round(set_y_start + i * (set_y_end - set_y_start) / 5))
-              for i in range(6)]
-    t.set_bubbles = [(568, y) for y in set_ys]
+    # SET — column at X=568, with measured (slightly non-uniform) Y values
+    t.set_bubbles = [
+        (568, 176), (568, 251), (568, 329),
+        (568, 407), (568, 484), (568, 564),
+    ]
 
-    # Question rows — 20 rows from Y=135 to Y=1604
-    q_y_start, q_y_end = 135, 1604
+    # Question rows — 20 rows from Y=135 to Y=1602
+    q_y_start, q_y_end = 135, 1602
     q_ys = [int(round(q_y_start + i * (q_y_end - q_y_start) / 19))
             for i in range(20)]
 
-    # 5 blocks of 4 columns each, measured precisely
+    # 5 blocks. Hough-measured X positions:
     block_xs = [
-        [721, 787, 855, 931],      # Q01-20
-        [1087, 1154, 1223, 1299],  # Q21-40
-        [1458, 1522, 1592, 1667],  # Q41-60
-        [1823, 1890, 1959, 2035],  # Q61-80
-        [2190, 2257, 2327, 2413],  # Q81-100
+        [715, 788, 862, 935],      # Q01-20
+        [1082, 1156, 1230, 1303],  # Q21-40
+        [1451, 1524, 1597, 1671],  # Q41-60
+        [1818, 1892, 1965, 2039],  # Q61-80
+        [2186, 2259, 2333, 2406],  # Q81-100
     ]
 
     answer_bubbles = []

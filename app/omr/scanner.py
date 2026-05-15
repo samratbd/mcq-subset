@@ -100,24 +100,27 @@ def _snap_centre(warped: np.ndarray, cx: int, cy: int,
                  r: int, search_r: int) -> Tuple[int, int]:
     """Find the actual bubble centre near the template position.
 
-    Optimization: most bubbles in a well-aligned template are already at
-    the right spot. So we first check the template position and only do
-    a search if the template position has SUBSTANTIALLY less fill than
-    one of the cardinal neighbours.
+    Fast path: if the template position already has high enough fill (clearly
+    on a marked bubble) OR clearly empty (no ink near), return as-is.
+    Slow path: do a 3×3 search at ±search_r/2 spacing.
 
-    The dense search itself uses a 5×5 grid at `search_r/2` step, which
-    is faster than the prior 11×11 grid while still catching small offsets.
+    This is ~5× faster than searching every bubble unconditionally and
+    still locks onto the correct centre when the template is slightly off.
     """
-    best_fill = _bubble_fill(warped, cx, cy, r)
+    fill_here = _bubble_fill(warped, cx, cy, r)
+    # If clearly filled or clearly empty, no need to search
+    if fill_here > 0.65 or fill_here < 0.05:
+        return (cx, cy)
+    # Ambiguous — search nearby
+    best_fill = fill_here
     best_pos = (cx, cy)
-    # 5×5 grid at half-step resolution = 25 samples max
     step = max(3, search_r // 2)
-    for dy in range(-search_r, search_r + 1, step):
-        for dx in range(-search_r, search_r + 1, step):
+    for dy in (-search_r, 0, search_r):
+        for dx in (-search_r, 0, search_r):
             if dx == 0 and dy == 0:
                 continue
             f = _bubble_fill(warped, cx + dx, cy + dy, r)
-            if f > best_fill + 0.03:
+            if f > best_fill + 0.05:
                 best_fill = f
                 best_pos = (cx + dx, cy + dy)
     return best_pos
@@ -398,7 +401,7 @@ def render_review_image(image_bytes: bytes,
     # dashed-blue boxes WITHIN those printed rectangles so the two don't
     # overlap. Padding picked tight enough that bubbles are well inside.
     def _draw_section_box(name: str, positions: list,
-                          color=(255, 80, 0), pad: int = 15):
+                          color=(255, 80, 0), pad: int = 25):
         if not positions:
             return
         xs = [p[0] for p in positions]
