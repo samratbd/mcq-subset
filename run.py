@@ -14,7 +14,53 @@ import threading
 import time
 import webbrowser
 
-from app.server import create_app
+
+def check_dependencies() -> None:
+    """Verify critical deps work; print actionable errors if not.
+
+    Most local-install failures present as a 500 error on the first request.
+    Catching them here gives a clear message at startup instead.
+    """
+    problems = []
+    try:
+        import cv2  # noqa
+    except ImportError:
+        problems.append(
+            "  - OpenCV (cv2) not installed.\n"
+            "    Fix: pip install opencv-python-headless"
+        )
+    except OSError as e:
+        msg = str(e)
+        if "libGL" in msg or "libgl" in msg.lower():
+            problems.append(
+                "  - OpenCV is installed but a system library is missing.\n"
+                "    On Linux: sudo apt install libgl1 libglib2.0-0\n"
+                "    On macOS: brew install pkg-config\n"
+                f"    Underlying error: {e}"
+            )
+        else:
+            problems.append(f"  - OpenCV import failed: {e}")
+    try:
+        import numpy  # noqa
+        import flask  # noqa
+        import openpyxl  # noqa
+        import docx  # noqa
+    except ImportError as e:
+        problems.append(
+            f"  - Missing Python package: {e}.\n"
+            "    Fix: pip install -r requirements.txt"
+        )
+
+    if problems:
+        sys.stderr.write(
+            "\n❌ MCQ Shuffler cannot start because of dependency problems:\n\n"
+        )
+        for p in problems:
+            sys.stderr.write(p + "\n\n")
+        sys.stderr.write(
+            "See README.md → 'Troubleshooting' for full setup instructions.\n\n"
+        )
+        sys.exit(1)
 
 
 def main():
@@ -25,8 +71,14 @@ def main():
                         help="Don't auto-open a browser tab")
     parser.add_argument("--debug", action="store_true",
                         help="Run Flask in debug mode (auto-reload)")
+    parser.add_argument("--skip-checks", action="store_true",
+                        help="Skip startup dependency checks")
     args = parser.parse_args()
 
+    if not args.skip_checks:
+        check_dependencies()
+
+    from app.server import create_app
     app = create_app()
 
     url = f"http://{args.host}:{args.port}/"

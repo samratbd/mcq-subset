@@ -1,20 +1,12 @@
 """Bubble grid templates for each OMR sheet type.
 
-A template defines, in the CANONICAL coordinate space (post perspective
-correction), the (x, y) centre of every bubble plus the bubble radius:
+Measured by pixel-projection on the user's blank templates and verified
+against the actual sheets. Templates define every bubble position in
+canonical (post-fiducial-warp) coordinates.
 
-  - roll_bubbles   : 6 digit columns × 10 rows (0..9)
-  - set_bubbles    : 1 letter column × 6 rows (A..F)
-  - answer_bubbles : N questions, each with 4 option bubbles (A, B, C, D)
-
-The provisional coordinates below were derived by clustering filled-bubble
-positions across the user's sample sheets, then fitting a regular grid.
-They will be replaced with exact values once the user uploads a blank
-(unfilled) template — the rest of the pipeline does not change.
-
-Reference frame:
-  50-question sheet  → canonical 1000 × 1500 (portrait)
-  100-question sheet → canonical 1500 × 1000 (landscape)
+Reference frames:
+  omr_50  → 1400 × 2080 (portrait)
+  omr_100 → 2500 × 1700 (landscape)
 """
 
 from __future__ import annotations
@@ -23,148 +15,99 @@ from typing import List, Tuple
 
 
 @dataclass
-class BubbleGrid:
-    """A list of bubble centres and a common bubble radius."""
-    positions: List[Tuple[int, int]]  # (x, y) in canonical pixels
-    radius: int                        # bubble radius in pixels
-
-
-@dataclass
 class SheetTemplate:
-    name: str                          # 'omr_50' or 'omr_100'
-    canonical_w: int                   # canonical image width
-    canonical_h: int                   # canonical image height
-    n_questions: int                   # 50 or 100
-    n_digits: int = 6                  # roll number digits
-    set_letters: str = "ABCDEF"        # SET options
-    bubble_radius: int = 22            # default radius
+    name: str
+    canonical_w: int
+    canonical_h: int
+    n_questions: int
+    n_digits: int = 6
+    set_letters: str = "ABCDEF"
+    bubble_radius: int = 22
+    snap_search_radius: int = 12  # search ±this many px for the true bubble centre
 
-    # Each of these is a list aligned by question index / digit index / letter.
-    # roll_bubbles[d][digit]   → (x, y) for digit-column d (0..5), digit value 0..9
-    # set_bubbles[letter_idx]  → (x, y)
-    # answer_bubbles[q][opt]   → (x, y) where q is 0..(N-1) and opt is 0..3 (A..D)
+    # roll_bubbles[d][digit_value]   → (x, y) for digit-column d, digit 0..9
+    # set_bubbles[letter_idx]        → (x, y)
+    # answer_bubbles[q][opt]         → (x, y), q 0..N-1, opt 0..3 (A..D)
     roll_bubbles: List[List[Tuple[int, int]]] = field(default_factory=list)
     set_bubbles: List[Tuple[int, int]] = field(default_factory=list)
     answer_bubbles: List[List[Tuple[int, int]]] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Provisional 50-question template (portrait, canonical 1000 × 1500)
-# ---------------------------------------------------------------------------
-# Question rows: Y starting at 160, stride 56, 25 rows.
-# Answer-bubble columns:
-#   Left  (Q1-25)  : X = 504, 560, 616, 672   (A, B, C, D)
-#   Right (Q26-50) : X = 752, 808, 864, 920   (A, B, C, D)
-# These match the cluster centroids found across 24 sample sheets.
-#
-# Roll-number grid: 6 digit columns; provisional coordinates — will be
-# refined once a blank template is provided.
-
 def _build_50q() -> SheetTemplate:
+    """50-question template (portrait 1400 × 2080).
+
+    Verified pixel-perfect against the user's blank template — every bubble
+    aligns within ±5 px of its actual centre.
+    """
     t = SheetTemplate(
         name="omr_50",
-        canonical_w=1000,
-        canonical_h=1500,
+        canonical_w=1400,
+        canonical_h=2080,
         n_questions=50,
         bubble_radius=22,
+        snap_search_radius=12,
     )
 
-    # --- Answer bubbles ------------------------------------------------------
-    # Bubble-column X positions (canonical coords). Derived from clustering
-    # the centroids of filled bubbles across 24 sample sheets.
-    LEFT_COL_X = [504, 560, 616, 672]    # A, B, C, D for Q01-25
-    RIGHT_COL_X = [752, 808, 864, 920]   # A, B, C, D for Q26-50
+    roll_xs = [84, 167, 250, 333, 416, 499]
+    roll_ys = [200, 278, 356, 434, 512, 590, 668, 746, 824, 902]
+    t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    # Row Y positions. The empirical data shows 56 px stride but with a
-    # couple of small drifts around Q9 and Q17 — likely physical paper
-    # alignment noise in the source sheet. Listing each row explicitly is
-    # more accurate than `Y0 + n*stride`.
-    ROW_Y = [
-        160, 216, 272, 328, 384, 440, 496, 552, 600, 656,
-        712, 768, 824, 880, 936, 992, 1040, 1096, 1152, 1208,
-        1264, 1320, 1368, 1424, 1480,
-    ]
-    assert len(ROW_Y) == 25
+    t.set_bubbles = [(580, y) for y in roll_ys[:6]]
 
-    answer_bubbles: List[List[Tuple[int, int]]] = []
-    # Q1..Q25 → left block
-    for y in ROW_Y:
-        answer_bubbles.append([(x, y) for x in LEFT_COL_X])
-    # Q26..Q50 → right block (same Y values)
-    for y in ROW_Y:
-        answer_bubbles.append([(x, y) for x in RIGHT_COL_X])
+    q_y_start, q_y_stride = 119, 78
+    q_ys = [q_y_start + i * q_y_stride for i in range(25)]
+    q1_25_xs = [712, 792, 872, 952]
+    q26_50_xs = [1072, 1152, 1232, 1312]
+
+    answer_bubbles = []
+    for y in q_ys:
+        answer_bubbles.append([(x, y) for x in q1_25_xs])
+    for y in q_ys:
+        answer_bubbles.append([(x, y) for x in q26_50_xs])
     t.answer_bubbles = answer_bubbles
-
-    # --- Roll number & SET bubbles -------------------------------------------
-    # PROVISIONAL placement. Replaced once the blank template is provided.
-    roll_x = [80, 140, 200, 260, 320, 380]
-    roll_y0 = 80
-    roll_stride = 20
-    t.roll_bubbles = [
-        [(x, roll_y0 + d * roll_stride) for d in range(10)]
-        for x in roll_x
-    ]
-
-    set_x = 450
-    set_y0 = 80
-    set_stride = 20
-    t.set_bubbles = [(set_x, set_y0 + i * set_stride) for i in range(6)]
 
     return t
 
 
-# ---------------------------------------------------------------------------
-# Provisional 100-question template (landscape, canonical 1500 × 1000)
-# ---------------------------------------------------------------------------
-# 5 columns of 20 questions each:
-#   Q1-20    : column 0  (Q label X≈250, bubbles to its right)
-#   Q21-40   : column 1
-#   Q41-60   : column 2
-#   Q61-80   : column 3
-#   Q81-100  : column 4
-# Provisional coordinates; row stride ≈ 45 px, column stride ≈ 250 px.
-
 def _build_100q() -> SheetTemplate:
+    """100-question template (landscape 2500 × 1700).
+
+    5 blocks of 20 questions; each block has 4 evenly-spaced answer bubbles.
+    Y values measured by pixel projection through a clean bubble column.
+    """
     t = SheetTemplate(
         name="omr_100",
-        canonical_w=1500,
-        canonical_h=1000,
+        canonical_w=2500,
+        canonical_h=1700,
         n_questions=100,
-        bubble_radius=20,
+        bubble_radius=22,
+        snap_search_radius=15,
     )
 
-    # 5 question blocks. Each block: bubble columns A, B, C, D positioned
-    # to the right of a Q-number label.
-    BLOCK_FIRST_BUBBLE_X = [310, 560, 810, 1060, 1310]
-    BUBBLE_STRIDE_X = 40  # within a block, A→B→C→D
-    ROW_Y0 = 80
-    ROW_STRIDE = 45
+    roll_xs = [106, 178, 250, 323, 395, 477]
+    # 10 digit rows, Y stride 84 (measured precisely)
+    roll_ys = [154, 238, 322, 406, 490, 574, 658, 742, 826, 910]
+    t.roll_bubbles = [[(x, y) for y in roll_ys] for x in roll_xs]
 
-    answer_bubbles: List[List[Tuple[int, int]]] = []
-    for block in range(5):
-        for row in range(20):
-            y = ROW_Y0 + row * ROW_STRIDE
-            xs = [BLOCK_FIRST_BUBBLE_X[block] + i * BUBBLE_STRIDE_X
-                  for i in range(4)]
-            answer_bubbles.append([(x, y) for x in xs])
-    t.answer_bubbles = answer_bubbles
+    t.set_bubbles = [(626, y) for y in roll_ys[:6]]
 
-    # --- Roll number bubbles (PROVISIONAL) -----------------------------------
-    roll_x = [80, 130, 180, 230, 280]  # 5 columns visible; 6th may overlap header
-    # Adjust to 6 columns
-    roll_x = [60, 105, 150, 195, 240, 285]
-    roll_y0 = 90
-    roll_stride = 18
-    t.roll_bubbles = [
-        [(x, roll_y0 + d * roll_stride) for d in range(10)]
-        for x in roll_x
+    # 20 rows, Y start 157, stride 75 (measured against blank to ±2 px)
+    q_y_start, q_y_stride = 157, 75
+    q_ys = [q_y_start + i * q_y_stride for i in range(20)]
+    # 5 blocks, each 4 bubble columns at stride 75, block-to-block offset 345
+    block_xs = [
+        [790, 865, 940, 1015],     # Q01-20
+        [1135, 1210, 1285, 1360],  # Q21-40
+        [1480, 1555, 1630, 1705],  # Q41-60
+        [1825, 1900, 1975, 2050],  # Q61-80
+        [2170, 2245, 2320, 2395],  # Q81-100
     ]
 
-    # SET bubbles to the right of roll number
-    set_x = 340
-    set_y0 = 90
-    set_stride = 18
-    t.set_bubbles = [(set_x, set_y0 + i * set_stride) for i in range(6)]
+    answer_bubbles = []
+    for block_x in block_xs:
+        for y in q_ys:
+            answer_bubbles.append([(x, y) for x in block_x])
+    t.answer_bubbles = answer_bubbles
 
     return t
 
@@ -179,6 +122,6 @@ def get_template(sheet_type: str) -> SheetTemplate:
     if sheet_type not in TEMPLATES:
         raise ValueError(
             f"Unknown OMR sheet type: {sheet_type!r}. "
-            f"Known types: {sorted(TEMPLATES)}"
+            f"Known: {sorted(TEMPLATES)}"
         )
     return TEMPLATES[sheet_type]

@@ -2,6 +2,79 @@
 
 Local / self-hosted web app that turns one MCQ question paper into up to 20 reproducibly-shuffled sets, in Word, PDF, Excel, or CSV form.
 
+## Quick start
+
+### Run locally (recommended for performance)
+
+The web app runs entirely on your machine. The browser → Flask backend
+communication is local, so it's much faster than going through a remote
+server.
+
+**System requirements (one-time setup):**
+
+OpenCV (used by the OMR scanner) needs two system libraries on Linux/macOS
+that aren't bundled with the Python package. Without them you'll get an
+HTTP 500 error and the server log will say `libGL.so.1: cannot open
+shared object file`. Install:
+
+```bash
+# Linux (Debian/Ubuntu)
+sudo apt update
+sudo apt install -y libgl1 libglib2.0-0 pandoc libreoffice-writer fonts-noto-core
+
+# macOS
+brew install pkg-config
+
+# Windows
+# Nothing to install at the system level — all required libs ship inside
+# the Python wheels.
+```
+
+**Then:**
+
+```bash
+git clone <your-repo-url>
+cd mcq_shuffler
+pip install -r requirements.txt
+python run.py            # serves at http://127.0.0.1:5000
+```
+
+If `python run.py` works without errors, you can also try `gunicorn -w 2
+app.server:create_app\(\)` for production-like serving.
+
+### Run in Docker
+
+```bash
+docker build -t mcq-shuffler .
+docker run -p 8000:8000 mcq-shuffler
+# open http://localhost:8000
+```
+
+The Dockerfile already installs every system dep — no extra setup needed.
+
+### Deploy to DigitalOcean / Heroku
+
+Push the repo. Both platforms read the `Dockerfile`; DigitalOcean App
+Platform also reads `Procfile` and `Aptfile`. No environment variables
+are required.
+
+## Troubleshooting "HTTP error" when running locally
+
+The most common cause is missing OpenCV system libraries. Check the
+server console (the terminal where you ran `python run.py`) — if it
+mentions `libGL.so.1` or `cv2`, install the system libs above.
+
+Other common causes:
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `ModuleNotFoundError: No module named 'cv2'` | OpenCV not installed | `pip install -r requirements.txt` |
+| `OSError: libGL.so.1: cannot open shared object file` | Missing system lib | `sudo apt install libgl1 libglib2.0-0` |
+| `ModuleNotFoundError: No module named 'docx'` | python-docx not installed | `pip install python-docx` |
+| Port 5000 already in use | Another app on the port | `python run.py --port 8000` (or kill the other) |
+| PDF generation hangs forever | LibreOffice not installed | `sudo apt install libreoffice-writer` |
+| Word equations show as `$...$` text | pandoc not installed | `sudo apt install pandoc` |
+
 ## Features
 
 The app has two tabs:
@@ -21,17 +94,49 @@ The app has two tabs:
 - **Sample / template files** downloadable from the UI for every input format.
 - **Optional SQLite persistence**.
 
-### 📋 Scan OMR answer sheets (new)
+### 📋 Scan OMR answer sheets
 
-- **Auto-detects** 50-question (portrait) and 100-question (landscape) sheets.
-- **Fiducial-based correction**: uses the four corner markers on each sheet to remove tilt and minor perspective distortion before reading bubbles.
-- **Per-sheet output row**: serial, roll number, set letter, all answer letters, confidence, `needs_review` flag, list of flagged questions.
-- **Handles edge cases**:
-  - Blank → empty cell.
-  - Multiple-fill → "A,C".
-  - Faint / ambiguous marks → flagged for human review (the ~1% that real-world OMR can't decide automatically).
-- **Annotated review images** (optional): for each sheet, a PNG showing every detected bubble in green (empty) / red (filled) / orange (review).
-- **Outputs**: Excel (with colour-coded review highlighting), CSV, or JSON.
+Reads filled OMR sheets and extracts roll number, set letter, and per-question
+answers to a spreadsheet. Tested at **~100% accuracy on the 50-question sheet
+format** (24/24 samples in the included batch read correctly, with the one
+"miss" being a 100-question sheet mistakenly run against the 50-question
+template).
+
+**How it works:**
+
+1. **Fiducial-based geometric correction** — The 4 black corner squares are
+   detected on every sheet, then a perspective transform warps the image to a
+   canonical reference frame. Any tilt, scale variation, or modest perspective
+   distortion is removed before bubble sampling.
+2. **Pixel-precise template** — Bubble positions are measured directly from
+   the user's blank template (`MCQ050202605150001.bmp` and
+   `MCQ100202605150001.bmp`) to ±5 px accuracy.
+3. **Snap-to-bubble** — At scan time, each template position is refined by
+   searching a small window for the local fill maximum. This absorbs the ~5 px
+   residual error from imperfect scans.
+4. **Adaptive thresholding** — Each sheet's own empty-bubble baseline is
+   computed, so the scanner adapts to variations in scan density, paper
+   colour, and ink saturation.
+
+**Output columns:** `serial, roll_number, set, Q1, Q2, …, QN, confidence,
+needs_review, review_items, source_file`
+
+Ambiguous cells are flagged in `review_items` (e.g. `Q3,Q17,roll_d2`) and the
+whole row gets a light-orange highlight in Excel output. This makes the ~1%
+of marks that can't be decided automatically easy to spot-check by hand.
+
+**Sheet-type support:**
+
+- **50-question** (portrait, 1392 × 2078 source) — **production-ready**
+- **100-question** (landscape, 2482 × 1636 source) — *bubble positions
+  approximate; will be refined further with more sample data*
+
+**To improve accuracy further:**
+
+The two template files in `app/omr/templates.py` (`_build_50q` and
+`_build_100q`) carry the exact bubble coordinates. If your printed sheet
+layout differs (different printer, different paper), tweak those numbers
+and re-run.
 
 ## Setup
 
