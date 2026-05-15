@@ -166,38 +166,61 @@ def _confidence(fills: List[float]) -> float:
 # --- Top-level scan ---------------------------------------------------------
 
 def scan_omr(image_bytes: bytes, sheet_type: str = "auto") -> OmrResult:
-    """Read one OMR sheet image, return the extracted data + diagnostics."""
+    """Read one OMR sheet image, return the extracted data + diagnostics.
+
+    Never raises — every failure path returns an OmrResult with `.error` set,
+    so the caller can build a partial batch result without exception handling.
+    """
+    if not image_bytes:
+        return _error_result(sheet_type, "Empty image data.")
+
     try:
         gray = robust_decode(image_bytes)
     except Exception as e:
         return _error_result(sheet_type, f"Image decode failed: {e}")
 
+    # Sanity check — abort early on absurdly small images
+    if gray.size < 1000 or min(gray.shape) < 100:
+        return _error_result(
+            sheet_type,
+            f"Image too small to be an OMR sheet "
+            f"({gray.shape[1]}×{gray.shape[0]}).",
+        )
+
     if sheet_type == "auto":
         sheet_type = _detect_sheet_type(gray)
-    template = get_template(sheet_type)
+
+    try:
+        template = get_template(sheet_type)
+    except Exception as e:
+        return _error_result(sheet_type, f"Unknown sheet type: {e}")
 
     try:
         fids = detect_fiducials(gray)
     except Exception as e:
         return _error_result(sheet_type, f"Fiducial detection failed: {e}")
 
-    warped = warp_to_canonical(
-        gray, fids, template.canonical_w, template.canonical_h
-    )
+    try:
+        warped = warp_to_canonical(
+            gray, fids, template.canonical_w, template.canonical_h
+        )
+    except Exception as e:
+        return _error_result(sheet_type, f"Perspective warp failed: {e}")
 
-    r = template.bubble_radius
-    sr = template.snap_search_radius
+    try:
+        r = template.bubble_radius
+        sr = template.snap_search_radius
 
-    # Sample every bubble (with snap)
-    answer_fills = [
-        _sample_group(warped, pos, r, sr) for pos in template.answer_bubbles
-    ]
-    roll_fills = [
-        _sample_group(warped, col, r, sr) for col in template.roll_bubbles
-    ]
-    set_fills = _sample_group(warped, template.set_bubbles, r, sr)
+        answer_fills = [
+            _sample_group(warped, pos, r, sr) for pos in template.answer_bubbles
+        ]
+        roll_fills = [
+            _sample_group(warped, col, r, sr) for col in template.roll_bubbles
+        ]
+        set_fills = _sample_group(warped, template.set_bubbles, r, sr)
+    except Exception as e:
+        return _error_result(sheet_type, f"Bubble sampling failed: {e}")
 
-    # Per-sheet empty baseline (median of the bottom 60% of answer fills)
     all_fills = [f for row in answer_fills for f in row]
     if all_fills:
         s = sorted(all_fills)
