@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+*.log
+data/
+*.zip
+.DS_Store
+Thumbs.db
+desktop/installer/Output/

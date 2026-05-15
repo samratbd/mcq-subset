@@ -20,11 +20,18 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from typing import List, Optional, Tuple
 
 from lxml import etree
+
+
+# On Windows, subprocess.run() without this flag briefly flashes a black
+# console window every time it's called. Setting CREATE_NO_WINDOW suppresses
+# that completely. On Linux/macOS this flag doesn't exist, so we default to 0.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 # Single-dollar inline math. The negative lookbehind/lookahead guard against
@@ -106,6 +113,7 @@ def katex_to_omml_xml(expr: str) -> Optional[str]:
             subprocess.run(
                 [pandoc, md_path, "-o", dx_path, "--from", "markdown", "--to", "docx"],
                 check=True, capture_output=True, timeout=15,
+                creationflags=_NO_WINDOW,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return None
@@ -194,6 +202,7 @@ def omml_to_latex(omml_xml: str) -> Optional[str]:
             r = subprocess.run(
                 [pandoc, dx, "-f", "docx", "-t", "markdown"],
                 capture_output=True, text=True, timeout=15,
+                creationflags=_NO_WINDOW,
             )
             if r.returncode != 0:
                 return None
@@ -229,6 +238,7 @@ def katex_to_unicode(latex: str) -> str:
         r = subprocess.run(
             [pandoc, "-f", "markdown", "-t", "plain", "--wrap=none"],
             input=md, capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW,
         )
         if r.returncode != 0:
             return f"${latex}$"

@@ -11,12 +11,13 @@ Public entry points:
   - TEMPLATES: dictionary of known sheet types
 """
 
-from .scanner import scan_omr, render_review_image, OmrResult
+from .scanner import scan_omr, render_review_image, scan_and_render, OmrResult
 from .output import write_csv, write_xlsx, write_json
 from .templates import TEMPLATES, get_template, SheetTemplate
 
 __all__ = [
     "scan_omr",
+    "scan_and_render",
     "render_review_image",
     "OmrResult",
     "write_csv", "write_xlsx", "write_json",

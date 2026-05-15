@@ -1,22 +1,19 @@
-"""PDF writer.
+"""PDF writer — converts DOCX to PDF using the best available engine.
 
-We generate PDF by rendering the matching DOCX layout, then converting it
-with LibreOffice in headless mode. This gives perfect fidelity to the Word
-output because we're literally rendering the same file.
+Priority:
+  1. docx2pdf  — uses Microsoft Word via COM (Windows only, best quality).
+     Requires:  pip install docx2pdf  AND  Microsoft Word installed.
+  2. LibreOffice headless — free, cross-platform fallback.
+     Requires:  LibreOffice installed (https://www.libreoffice.org).
 
-LibreOffice is heavy (~600 MB on Linux), so the function checks for the
-binary at call time and raises a clear error if it's not installed.
-
-Concurrency note: LibreOffice's "user profile" is a global lock by default
-— two simultaneous invocations would fight over `~/.config/libreoffice`.
-We sidestep that by giving each invocation its own throwaway profile dir
-via `-env:UserInstallation`.
+If neither works, raises RuntimeError with install instructions.
 """
 
 from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 from typing import List, Optional
@@ -24,85 +21,145 @@ from typing import List, Optional
 from ..models import Question
 from .docx_writer import write_docx_normal, write_docx_database
 
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+# ---------------------------------------------------------------------------
+# Engine detection
+# ---------------------------------------------------------------------------
+
+def _docx2pdf_available() -> bool:
+    """True only on Windows with docx2pdf + Word installed."""
+    if sys.platform != "win32":
+        return False  # docx2pdf is Windows-only
+    try:
+        import docx2pdf  # noqa: F401
+        import win32com.client  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 def _libreoffice_binary() -> Optional[str]:
-    """Find a LibreOffice binary: ``libreoffice``, then ``soffice``."""
-    return shutil.which("libreoffice") or shutil.which("soffice")
+    for name in ("libreoffice", "soffice"):
+        path = shutil.which(name)
+        if path:
+            return path
+    if sys.platform == "win32":
+        for root in (
+            r"C:\Program Files\LibreOffice\program",
+            r"C:\Program Files (x86)\LibreOffice\program",
+            r"C:\Program Files\LibreOffice 7\program",
+        ):
+            candidate = os.path.join(root, "soffice.exe")
+            if os.path.exists(candidate):
+                return candidate
+    return None
 
 
 def libreoffice_available() -> bool:
     return _libreoffice_binary() is not None
 
 
-def docx_bytes_to_pdf_bytes(docx_bytes: bytes, *, timeout: int = 90) -> bytes:
-    """Convert a docx blob to PDF using LibreOffice headless mode."""
-    binary = _libreoffice_binary()
-    if not binary:
-        raise RuntimeError(
-            "LibreOffice is not installed on this server. "
-            "PDF output requires libreoffice; install with `apt install "
-            "libreoffice` (or use the project's Dockerfile, which bundles it). "
-            "All other formats (Word, Excel, CSV) work without it."
-        )
+def pdf_engine_available() -> bool:
+    return _docx2pdf_available() or libreoffice_available()
 
+
+def pdf_engine_name() -> str:
+    if _docx2pdf_available():
+        return "Microsoft Word (docx2pdf)"
+    if libreoffice_available():
+        return "LibreOffice"
+    return "none — install LibreOffice or (Windows) pip install docx2pdf"
+
+
+# ---------------------------------------------------------------------------
+# Converter
+# ---------------------------------------------------------------------------
+
+def docx_bytes_to_pdf_bytes(docx_bytes: bytes, *, timeout: int = 120) -> bytes:
+    """Convert a DOCX blob to PDF using the best available engine."""
+    if _docx2pdf_available():
+        return _convert_via_docx2pdf(docx_bytes)
+    binary = _libreoffice_binary()
+    if binary:
+        return _convert_via_libreoffice(docx_bytes, binary, timeout)
+    raise RuntimeError(
+        "No PDF engine found.\n\n"
+        "Windows: pip install docx2pdf  (requires Microsoft Word)\n"
+        "All platforms: install LibreOffice from https://www.libreoffice.org\n\n"
+        "Restart the app after installing."
+    )
+
+
+def _convert_via_docx2pdf(docx_bytes: bytes) -> bytes:
+    import docx2pdf
     with tempfile.TemporaryDirectory() as td:
         docx_path = os.path.join(td, "in.docx")
+        pdf_path = os.path.join(td, "in.pdf")
         with open(docx_path, "wb") as f:
             f.write(docx_bytes)
-
-        # Per-invocation user profile dir avoids concurrent-call lock issues.
-        profile_dir = os.path.join(td, f"lo_profile_{uuid.uuid4().hex}")
-        cmd = [
-            binary,
-            f"-env:UserInstallation=file://{profile_dir}",
-            "--headless",
-            "--convert-to", "pdf",
-            "--outdir", td,
-            docx_path,
-        ]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, timeout=timeout, check=False
-            )
-        except subprocess.TimeoutExpired:
+            docx2pdf.convert(docx_path, pdf_path)
+        except Exception as e:
             raise RuntimeError(
-                f"LibreOffice timed out after {timeout}s converting the doc."
+                f"Word conversion failed: {e}\n"
+                "Ensure Microsoft Word is installed and can open .docx files."
             )
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                "LibreOffice failed to convert the document: "
-                + (result.stderr.decode("utf-8", errors="replace")[:500]
-                   or result.stdout.decode("utf-8", errors="replace")[:500])
-            )
-
-        pdf_path = os.path.join(td, "in.pdf")
         if not os.path.exists(pdf_path):
-            raise RuntimeError(
-                "LibreOffice ran but didn't produce a PDF — likely a "
-                "rendering failure inside the document."
-            )
+            raise RuntimeError("docx2pdf ran but produced no PDF.")
         with open(pdf_path, "rb") as f:
             return f.read()
 
 
-def write_pdf_normal(questions: List[Question],
-                     *,
-                     title: str = "",
-                     math_mode: str = "equation",
+def _convert_via_libreoffice(docx_bytes: bytes,
+                              binary: str,
+                              timeout: int) -> bytes:
+    with tempfile.TemporaryDirectory() as td:
+        docx_path = os.path.join(td, "in.docx")
+        with open(docx_path, "wb") as f:
+            f.write(docx_bytes)
+        profile = os.path.join(td, f"lo_{uuid.uuid4().hex}")
+        cmd = [
+            binary,
+            f"-env:UserInstallation=file://{profile}",
+            "--headless", "--convert-to", "pdf",
+            "--outdir", td, docx_path,
+        ]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, timeout=timeout, check=False,
+                creationflags=_NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"LibreOffice timed out after {timeout}s.")
+        if r.returncode != 0:
+            raise RuntimeError(
+                "LibreOffice failed: "
+                + (r.stderr.decode("utf-8", errors="replace")[:400]
+                   or r.stdout.decode("utf-8", errors="replace")[:400])
+            )
+        pdf_path = os.path.join(td, "in.pdf")
+        if not os.path.exists(pdf_path):
+            raise RuntimeError("LibreOffice ran but produced no PDF.")
+        with open(pdf_path, "rb") as f:
+            return f.read()
+
+
+# Aliases used by the web server
+def write_pdf_normal(questions: List[Question], *,
+                     title: str = "", math_mode: str = "equation",
                      header_image: Optional[bytes] = None) -> bytes:
-    docx = write_docx_normal(
-        questions, title=title, math_mode=math_mode, header_image=header_image,
+    return docx_bytes_to_pdf_bytes(
+        write_docx_normal(questions, title=title,
+                          math_mode=math_mode, header_image=header_image)
     )
-    return docx_bytes_to_pdf_bytes(docx)
 
 
-def write_pdf_database(questions: List[Question],
-                       *,
-                       title: str = "",
-                       math_mode: str = "equation",
-                       header_image: Optional[bytes] = None) -> bytes:
-    docx = write_docx_database(
-        questions, title=title, math_mode=math_mode, header_image=header_image,
+def write_pdf_database(questions: List[Question], *,
+                        title: str = "", math_mode: str = "equation",
+                        header_image: Optional[bytes] = None) -> bytes:
+    return docx_bytes_to_pdf_bytes(
+        write_docx_database(questions, title=title,
+                             math_mode=math_mode, header_image=header_image)
     )
-    return docx_bytes_to_pdf_bytes(docx)

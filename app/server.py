@@ -36,6 +36,23 @@ from .samples import build_sample_paper, sample_manifest, write_sample_to_bytes
 
 # --- app & storage -----------------------------------------------------------
 
+def _available_ram_mb() -> int:
+    """Return approximate total system RAM in MB (cross-platform)."""
+    try:
+        # Linux: read /proc/meminfo
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    try:
+        import os
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+    except Exception:
+        return 2048  # assume 2 GB if unknown
+
+
 def create_app() -> Flask:
     app = Flask(
         __name__,
@@ -435,12 +452,15 @@ def create_app() -> Flask:
                     continue
                 files_data.append((fname, data, None))
 
-            # Parallel-scan all files using ThreadPoolExecutor.
-            # OpenCV releases the GIL during image processing so threads
-            # genuinely run in parallel on multi-core CPUs.
-            from concurrent.futures import ThreadPoolExecutor
-            import os
-            max_workers = min(8, max(2, (os.cpu_count() or 2)))
+            # Scan all files. On low-memory servers (≤1 GB) we process ONE
+            # sheet at a time and immediately discard the image from memory.
+            # On multi-CPU servers we use a small thread pool.
+            import os, gc
+            total_ram_mb = _available_ram_mb()
+            cpus = os.cpu_count() or 1
+            # Use parallel only when we have both multiple cores AND enough RAM
+            use_parallel = cpus >= 2 and total_ram_mb >= 1800
+            max_workers = min(4, cpus) if use_parallel else 1
 
             def _scan_one(item):
                 fname, data, pre_error = item
@@ -476,13 +496,26 @@ def create_app() -> Flask:
 
             results: list = []
             per_sheet_review_imgs: list = []
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for res, fname, review_png in pool.map(_scan_one, files_data):
+
+            if use_parallel:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    for res, fname, review_png in pool.map(_scan_one, files_data):
+                        results.append((res, fname))
+                        if review_png:
+                            per_sheet_review_imgs.append(
+                                ((fname or "sheet") + "_review.png", review_png)
+                            )
+            else:
+                # Low-memory serial path: process one sheet, free memory, repeat
+                for item in files_data:
+                    res, fname, review_png = _scan_one(item)
                     results.append((res, fname))
                     if review_png:
                         per_sheet_review_imgs.append(
                             ((fname or "sheet") + "_review.png", review_png)
                         )
+                    gc.collect()  # release image data promptly
 
             if not results:
                 return jsonify(

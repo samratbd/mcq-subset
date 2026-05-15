@@ -279,6 +279,37 @@ def _set_section_columns_only(section, num_cols: int, space_dxa: int = 360):
 
 
 # ---------------------------------------------------------------------------
+# Copyright footer
+# ---------------------------------------------------------------------------
+
+# Set at module level — can be overridden before calling write_docx_*
+FOOTER_COPYRIGHT: str = ""  # e.g. "© Onurion.com | Developed by S M Samrat"
+
+
+def _add_copyright_footer(doc: Document) -> None:
+    """Add a small centered copyright footer to every page of the document.
+
+    This uses Word's native page footer mechanism, so it appears on every
+    page including the answer sheet. Set FOOTER_COPYRIGHT before calling
+    write_docx_* to enable it; an empty string means no footer.
+    """
+    text = FOOTER_COPYRIGHT
+    if not text:
+        return
+    for section in doc.sections:
+        footer = section.footer
+        # Remove any existing empty paragraph added by python-docx
+        for p in list(footer.paragraphs):
+            p._element.getparent().remove(p._element)
+        p = footer.add_paragraph()
+        _zero_paragraph_spacing(p._p)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(text)
+        run.font.size = Pt(8)
+        run.font.color.rgb = None  # default (black)
+
+
+# ---------------------------------------------------------------------------
 # Layout 1: Normal
 # ---------------------------------------------------------------------------
 
@@ -454,6 +485,7 @@ def write_docx_normal(questions: List[Question],
             _set_cell_borders(cell)
 
     buf = io.BytesIO()
+    _add_copyright_footer(doc)
     doc.save(buf)
     return buf.getvalue()
 
@@ -526,5 +558,6 @@ def write_docx_database(questions: List[Question],
             _set_cell_borders(cell)
 
     buf = io.BytesIO()
+    _add_copyright_footer(doc)
     doc.save(buf)
     return buf.getvalue()

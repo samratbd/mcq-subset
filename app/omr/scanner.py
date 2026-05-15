@@ -216,78 +216,9 @@ def scan_omr(image_bytes: bytes, sheet_type: str = "auto") -> OmrResult:
         return _error_result(sheet_type, f"Perspective warp failed: {e}")
 
     try:
-        r = template.bubble_radius
-        sr = template.snap_search_radius
-
-        answer_fills = [
-            _sample_group(warped, pos, r, sr) for pos in template.answer_bubbles
-        ]
-        roll_fills = [
-            _sample_group(warped, col, r, sr) for col in template.roll_bubbles
-        ]
-        set_fills = _sample_group(warped, template.set_bubbles, r, sr)
+        return _scan_from_warped(warped, sheet_type, template)
     except Exception as e:
         return _error_result(sheet_type, f"Bubble sampling failed: {e}")
-
-    all_fills = [f for row in answer_fills for f in row]
-    if all_fills:
-        s = sorted(all_fills)
-        baseline = float(np.median(s[: max(1, int(len(s) * 0.6))]))
-    else:
-        baseline = 0.05
-
-    answers: List[str] = []
-    review_items: List[str] = []
-    confs: List[float] = []
-    for q_idx, fills in enumerate(answer_fills):
-        sel, kind = _classify_group(fills, baseline)
-        if kind == "empty":
-            answers.append("")
-        elif kind == "single":
-            answers.append("ABCD"[sel[0]])
-        elif kind == "multi":
-            answers.append(",".join("ABCD"[i] for i in sel))
-        else:
-            best = int(np.argmax(fills))
-            answers.append("ABCD"[best])
-            review_items.append(f"Q{q_idx + 1}")
-        confs.append(_confidence(fills))
-
-    roll_chars: List[str] = []
-    for d_idx, fills in enumerate(roll_fills):
-        sel, kind = _classify_group(fills, baseline)
-        if kind == "single":
-            roll_chars.append(str(sel[0]))
-        elif kind == "empty":
-            roll_chars.append("?")
-            review_items.append(f"roll_d{d_idx + 1}")
-        else:
-            roll_chars.append(str(int(np.argmax(fills))))
-            review_items.append(f"roll_d{d_idx + 1}")
-    roll_number = "".join(roll_chars)
-
-    sel, kind = _classify_group(set_fills, baseline)
-    if kind == "single":
-        set_letter = template.set_letters[sel[0]]
-    elif kind == "empty":
-        set_letter = "?"
-        review_items.append("set")
-    else:
-        set_letter = template.set_letters[int(np.argmax(set_fills))]
-        review_items.append("set")
-
-    overall_conf = float(np.mean(confs)) if confs else 0.0
-
-    return OmrResult(
-        sheet_type=sheet_type,
-        roll_number=roll_number,
-        set_letter=set_letter,
-        answers=answers,
-        confidence=overall_conf,
-        needs_review=bool(review_items),
-        review_items=review_items,
-        fill_fractions=answer_fills,
-    )
 
 
 def _error_result(sheet_type: str, msg: str) -> OmrResult:
@@ -304,41 +235,153 @@ def _error_result(sheet_type: str, msg: str) -> OmrResult:
     )
 
 
-# --- Annotated review image -------------------------------------------------
+def scan_and_render(image_bytes: bytes,
+                    sheet_type: str = "auto",
+                    max_review_height: int = 1600,
+                    ) -> Tuple[OmrResult, bytes]:
+    """Scan one sheet AND render its review image in a single pass.
 
-def render_review_image(image_bytes: bytes,
-                        result: OmrResult,
-                        max_height: int = 1600) -> bytes:
-    """Render the warped sheet with every bubble drawn in colour:
+    ~2× faster than calling scan_omr() + render_review_image() separately,
+    because it avoids redoing image decode, fiducial detection, and the
+    perspective warp.
 
-        green  — clearly empty
-        red    — clearly filled (= selected as the answer)
-        orange — ambiguous (flagged for review)
-
-    Also draws:
-      - Yellow rectangle connecting the 4 fiducial corners (the OMR's
-        outer geometry — confirms perspective correction worked).
-      - Dashed BLUE outlines around each section (Roll, SET, Q blocks).
-      - Header row with roll / set / confidence / review status.
+    Returns (result, png_bytes). On failure png_bytes may be empty.
     """
+    if not image_bytes:
+        return _error_result(sheet_type, "Empty image data."), b""
+
     try:
         gray = robust_decode(image_bytes)
+    except Exception as e:
+        return _error_result(sheet_type, f"Image decode failed: {e}"), b""
+
+    if gray.size < 1000 or min(gray.shape) < 100:
+        return _error_result(
+            sheet_type,
+            f"Image too small ({gray.shape[1]}×{gray.shape[0]}).",
+        ), b""
+
+    if sheet_type == "auto":
+        sheet_type = _detect_sheet_type(gray)
+
+    try:
+        template = get_template(sheet_type)
+    except Exception as e:
+        return _error_result(sheet_type, f"Unknown sheet type: {e}"), b""
+
+    try:
         fids = detect_fiducials(gray)
-        template = get_template(result.sheet_type)
+    except Exception as e:
+        return _error_result(sheet_type, f"Fiducial detection failed: {e}"), b""
+
+    try:
         warped = warp_to_canonical(
             gray, fids, template.canonical_w, template.canonical_h
         )
-    except Exception:
-        return b""
+    except Exception as e:
+        return _error_result(sheet_type, f"Warp failed: {e}"), b""
 
+    # Run the scan logic on the already-warped image
+    try:
+        result = _scan_from_warped(warped, sheet_type, template)
+    except Exception as e:
+        return _error_result(sheet_type, f"Scan failed: {e}"), b""
+
+    # Render the review image using the same warped canvas
+    try:
+        review_png = _render_from_warped(
+            warped, template, result, max_height=max_review_height,
+        )
+    except Exception:
+        review_png = b""
+
+    return result, review_png
+
+
+def _scan_from_warped(warped: np.ndarray,
+                      sheet_type: str,
+                      template: SheetTemplate) -> OmrResult:
+    """Same logic as scan_omr but starts from an already-warped image."""
+    r = template.bubble_radius
+    sr = template.snap_search_radius
+
+    answer_fills = [_sample_group(warped, pos, r, sr)
+                    for pos in template.answer_bubbles]
+    roll_fills = [_sample_group(warped, col, r, sr)
+                  for col in template.roll_bubbles]
+    set_fills = _sample_group(warped, template.set_bubbles, r, sr)
+
+    all_fills = [f for row in answer_fills for f in row]
+    if all_fills:
+        s = sorted(all_fills)
+        baseline = float(np.median(s[: max(1, int(len(s) * 0.6))]))
+    else:
+        baseline = 0.05
+
+    answers, review_items, confs = [], [], []
+    for q_idx, fills in enumerate(answer_fills):
+        sel, kind = _classify_group(fills, baseline)
+        if kind == "empty":
+            answers.append("")
+        elif kind == "single":
+            answers.append("ABCD"[sel[0]])
+        elif kind == "multi":
+            answers.append(",".join("ABCD"[i] for i in sel))
+        else:
+            answers.append("ABCD"[int(np.argmax(fills))])
+            review_items.append(f"Q{q_idx + 1}")
+        confs.append(_confidence(fills))
+
+    roll_chars = []
+    for d_idx, fills in enumerate(roll_fills):
+        sel, kind = _classify_group(fills, baseline)
+        if kind == "single":
+            roll_chars.append(str(sel[0]))
+        elif kind == "empty":
+            roll_chars.append("?")
+        else:
+            roll_chars.append(str(int(np.argmax(fills))))
+            review_items.append(f"roll_d{d_idx + 1}")
+    roll_number = "".join(roll_chars)
+    sel, kind = _classify_group(set_fills, baseline)
+    if kind == "single":
+        set_letter = template.set_letters[sel[0]]
+    elif kind == "empty":
+        set_letter = "?"
+        review_items.append("set")
+    else:
+        set_letter = template.set_letters[int(np.argmax(set_fills))]
+        review_items.append("set")
+
+    return OmrResult(
+        sheet_type=sheet_type,
+        roll_number=roll_number,
+        set_letter=set_letter,
+        answers=answers,
+        confidence=float(np.mean(confs)) if confs else 0.0,
+        needs_review=bool(review_items),
+        review_items=review_items,
+        fill_fractions=answer_fills,
+    )
+
+
+# --- Annotated review image -------------------------------------------------
+
+def _render_from_warped(warped: np.ndarray,
+                        template: SheetTemplate,
+                        result: OmrResult,
+                        max_height: int = 1600) -> bytes:
+    """Draw the review overlay on an already-warped grayscale image.
+
+    Separated from render_review_image() so scan_and_render() can reuse the
+    warp without redoing decode + detect_fiducials + warp.
+    """
     canvas = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     r = template.bubble_radius
 
     flagged_qs = {item for item in result.review_items if item.startswith("Q")}
 
-    # --- Draw the fiducial-bounded rectangle (yellow) -----------------------
-    # After warping, fiducials sit at the canonical margins. Connect them
-    # so the user can visually confirm the OMR's outer geometry.
+    # Yellow rectangle along the fiducial-bounded canvas perimeter
     from .fiducial import FIDUCIAL_MARGIN
     m = FIDUCIAL_MARGIN
     W, H = template.canonical_w, template.canonical_h
@@ -346,10 +389,7 @@ def render_review_image(image_bytes: bytes,
     for i in range(4):
         cv2.line(canvas, corners[i], corners[(i + 1) % 4], (0, 220, 220), 3)
 
-    # --- Answer bubbles ----------------------------------------------------
-    # Each option gets a CLEAR circular outline so it's easy to verify
-    # alignment at a glance. Selected (filled) bubbles get an extra inner
-    # ring at smaller radius for visual emphasis.
+    # Answer bubbles
     for q_idx, positions in enumerate(template.answer_bubbles):
         flagged = f"Q{q_idx + 1}" in flagged_qs
         selected_letters = set()
@@ -360,17 +400,16 @@ def render_review_image(image_bytes: bytes,
         for opt_idx, (x, y) in enumerate(positions):
             letter = "ABCD"[opt_idx]
             if flagged:
-                color = (0, 140, 255)        # orange
+                color = (0, 140, 255)
             elif letter in selected_letters:
-                color = (0, 0, 255)          # red — selected
+                color = (0, 0, 255)
             else:
-                color = (0, 200, 0)          # green — empty
+                color = (0, 200, 0)
             cv2.circle(canvas, (x, y), r, color, 2)
             if letter in selected_letters and not flagged:
-                # Inner ring for emphasis on selected option
                 cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
-    # --- Roll number bubbles (cyan) ----------------------------------------
+    # Roll number bubbles
     for d_idx, col_positions in enumerate(template.roll_bubbles):
         selected_idx = None
         if d_idx < len(result.roll_number):
@@ -379,14 +418,14 @@ def render_review_image(image_bytes: bytes,
                 selected_idx = int(ch)
         for digit_val, (x, y) in enumerate(col_positions):
             if digit_val == selected_idx:
-                color = (0, 0, 255)          # red — selected digit
+                color = (0, 0, 255)
             else:
-                color = (200, 200, 0)        # cyan — empty
+                color = (200, 200, 0)
             cv2.circle(canvas, (x, y), r, color, 2)
             if digit_val == selected_idx:
                 cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
-    # --- SET bubbles (magenta) ---------------------------------------------
+    # SET bubbles
     selected_set_idx = None
     if result.set_letter and result.set_letter != "?":
         selected_set_idx = template.set_letters.index(result.set_letter)
@@ -396,12 +435,9 @@ def render_review_image(image_bytes: bytes,
         if s_idx == selected_set_idx:
             cv2.circle(canvas, (x, y), max(r - 6, 4), color, 1)
 
-    # --- Section labels (dashed blue boxes + names) ------------------------
-    # The OMR has its own printed rectangles around each section. We draw our
-    # dashed-blue boxes WITHIN those printed rectangles so the two don't
-    # overlap. Padding picked tight enough that bubbles are well inside.
-    def _draw_section_box(name: str, positions: list,
-                          color=(255, 80, 0), pad: int = 25):
+    # Section labels
+    def _box(name: str, positions: list,
+             color=(255, 80, 0), pad: int = 25):
         if not positions:
             return
         xs = [p[0] for p in positions]
@@ -418,22 +454,18 @@ def render_review_image(image_bytes: bytes,
         cv2.putText(canvas, name, (x0 + 4, label_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-    roll_positions = [p for col in template.roll_bubbles for p in col]
-    _draw_section_box("ROLL NUMBER", roll_positions)
-    _draw_section_box("SET", template.set_bubbles)
-
+    _box("ROLL NUMBER", [p for col in template.roll_bubbles for p in col])
+    _box("SET", template.set_bubbles)
     n = template.n_questions
     if n == 50:
-        block1 = [p for q in template.answer_bubbles[:25] for p in q]
-        block2 = [p for q in template.answer_bubbles[25:] for p in q]
-        _draw_section_box("Q01-25", block1)
-        _draw_section_box("Q26-50", block2)
+        _box("Q01-25", [p for q in template.answer_bubbles[:25] for p in q])
+        _box("Q26-50", [p for q in template.answer_bubbles[25:] for p in q])
     elif n == 100:
         for blk in range(5):
             start = blk * 20
             positions = [p for q in template.answer_bubbles[start:start + 20] for p in q]
             label = f"Q{start + 1:02d}-{start + 20}"
-            _draw_section_box(label, positions)
+            _box(label, positions)
 
     summary = (
         f"Roll={result.roll_number}  SET={result.set_letter}  "
@@ -449,3 +481,24 @@ def render_review_image(image_bytes: bytes,
 
     ok, png = cv2.imencode(".png", canvas)
     return png.tobytes() if ok else b""
+
+
+def render_review_image(image_bytes: bytes,
+                        result: OmrResult,
+                        max_height: int = 1600) -> bytes:
+    """Render an annotated review PNG from raw image bytes.
+
+    Slower than scan_and_render() because it has to re-decode the image
+    and recompute the warp. Use scan_and_render() when you need both the
+    OMR result AND the review image — it's ~2× faster.
+    """
+    try:
+        gray = robust_decode(image_bytes)
+        fids = detect_fiducials(gray)
+        template = get_template(result.sheet_type)
+        warped = warp_to_canonical(
+            gray, fids, template.canonical_w, template.canonical_h
+        )
+    except Exception:
+        return b""
+    return _render_from_warped(warped, template, result, max_height)
